@@ -92,26 +92,64 @@ def draw_floor_corners(canvas):
     return canvas
 
 
-def make_random_trail(n=12):
-    x, y = random.randint(300, 700), random.randint(300, 700)
-    pts = [(x, y)]
-    dx, dy = random.randint(-40, 40), random.randint(-40, 40) 
-    for _ in range(n - 1):
-        dx = dx + random.randint(-30, 30) * 0.3
-        dy = dy + random.randint(-30, 30) * 0.3
-        x = max(80, min(920, int(x + dx)))
-        y = max(80, min(920, int(y + dy)))
-        pts.append((x, y))
-    return pts
+# ─────────────────────────────────────────────────────────────────────────────
+# Random trail
+# ─────────────────────────────────────────────────────────────────────────────
+# UDP Receiver
+# ─────────────────────────────────────────────────────────────────────────────
+import socket
 
+class FootstepUDPReceiver:
+    def __init__(self, port=7000):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Bind to all interfaces, port 7000
+        self.sock.bind(("0.0.0.0", port))
+        self.sock.setblocking(False)
+        self.people = {} # person_id -> { "pos": (x,y), "history": [(hx,hy), ...] }
 
-trail = make_random_trail()
+    def poll(self):
+        try:
+            while True:
+                data, addr = self.sock.recvfrom(4096)
+                if not data:
+                    break
+                text = data.decode("utf-8").strip()
+                for line in text.split('\n'):
+                    if not line: continue
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        x = float(parts[0])
+                        y = float(parts[1])
+                        person_id = int(parts[2])
+                        history_length = int(parts[3])
+                        
+                        history = []
+                        idx = 4
+                        for _ in range(history_length):
+                            if idx + 1 < len(parts):
+                                history.append((float(parts[idx]), float(parts[idx+1])))
+                                idx += 2
+                                
+                        self.people[person_id] = {
+                            "pos": (x, y),
+                            "history": history
+                        }
+        except BlockingIOError:
+            pass
+        except Exception as e:
+            pass
+
+udp_receiver = FootstepUDPReceiver(7000)
 
 # Camera view renderer (inverse warp from floor to camera space)
-def render_camera_view(mapper, floor_pts, trail_pts, cam_w=CAM_W, cam_h=CAM_H):
+def render_camera_view(mapper, person_trails, cam_w=CAM_W, cam_h=CAM_H):
     H_cam_inv = np.linalg.inv(mapper.H_cam)
     canvas = mapper.make_floor_canvas()
-    canvas = mapper.do_stuff(canvas, floor_pts, trail_pts)
+    
+    if person_trails:
+        for trail in person_trails:
+            if trail:
+                canvas = mapper.do_stuff(canvas, [trail[-1]], trail[:-1])
 
     # draw the floor corners on the floor canvas before warping into cam space
     draw_floor_corners(canvas)
@@ -144,19 +182,41 @@ def label(img, text, sub=None):
 
 
 # Main loop
-print("Q = quit   R = new trail")
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("Q = quit")
 
 while True:
-    # stage 1: floor canvas (pre-warp, flat top-down)
+    udp_receiver.poll()
+    
+    # Collect all points mapping from normalized camera to floor space
+    person_trails = []
+    
+    for pid, data in udp_receiver.people.items():
+        # denormalize to camera frame coords
+        # Note: Depending on your real camera, the W/H might be different here
+        # but for this visualisation we map them to the 640x480 cam bounds defined
+        trail = []
+        for hx, hy in data["history"]:
+            hcx, hcy = hx * CAM_W, hy * CAM_H
+            trail.append(mapper.cam_to_floor((hcx, hcy)))
+            
+        if trail:
+            person_trails.append(trail)
+
+    # ── Stage 1: floor canvas (pre-warp, flat top-down) ───────────────────
     floor_canvas = mapper.make_floor_canvas()
-    floor_canvas = mapper.do_stuff(floor_canvas, [trail[-1]], trail)
+    for trail in person_trails:
+        if trail:
+            floor_canvas = mapper.do_stuff(floor_canvas, [trail[-1]], trail[:-1])
+
     draw_floor_corners(floor_canvas)
     view_floor = label(floor_canvas,
                        "1  floor space (pre-warp)",
                        "flat 1000x1000, corners = tape marks on floor")
 
-    # stage 2: projector output (post-warp)
-    proj_full  = mapper.render_projector_frame(floor_pts=[trail[-1]], trail_pts=trail)
+    # ── Stage 2: projector output (post-warp) ─────────────────────────────
+    proj_full  = mapper.render_projector_frame(person_trails=person_trails)
 
     # draw proj corner markers directly in projector space
     for (px, py), lbl, color in zip(proj_pts, CORNER_LABELS, CORNER_COLORS):
@@ -171,8 +231,8 @@ while True:
                        "2  projector output (post-warp)",
                        "1920x1080 shown at 50% — keystone corrects for angle")
 
-    # stage 3: camera screen space
-    cam_view  = render_camera_view(mapper, [trail[-1]], trail)
+    # ── Stage 3: camera screen space ──────────────────────────────────────
+    cam_view  = render_camera_view(mapper, person_trails)
     view_cam  = label(cam_view,
                       "3  camera screen space",
                       "640x480 — trapezoid = what camera sees from 7ft / 45 deg")
@@ -184,9 +244,5 @@ while True:
     key = cv2.waitKey(30) & 0xFF
     if key == ord('q'):
         break
-    if key == ord('r'):
-        trail = make_random_trail()
-        mapper.tick = 0 
-        print("New trail:", trail)
 
 cv2.destroyAllWindows()

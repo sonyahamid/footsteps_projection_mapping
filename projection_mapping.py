@@ -408,15 +408,20 @@ class ProjectionMapper:
 
         return floor_canvas
     
-    def render_projector_frame(self, floor_pts=None, trail_pts=None):
+    def render_projector_frame(self, person_trails=None):
         """
         Full pipeline: blank canvas -> draw animations -> warp to projector space.
+        person_trails: List of point arrays. Each array is a trail for one person.
+                       The last point is the current position.
         Returns an (proj_h x proj_w x 3) numpy array ready to display/stream.
         """
         floor_canvas = self.make_floor_canvas()
 
-        if floor_pts:
-            floor_canvas = self.do_stuff(floor_canvas, floor_pts, trail_pts)
+        if person_trails:
+            for trail in person_trails:
+                if trail:
+                    # current position is the last element
+                    floor_canvas = self.do_stuff(floor_canvas, [trail[-1]], trail[:-1])
 
         self.tick += 1
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
