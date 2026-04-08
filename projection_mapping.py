@@ -28,7 +28,39 @@ import numpy as np
 import json
 import argparse
 from pathlib import Path
+from PIL import Image
 
+class GifAnimator:
+    """Pre-loads a GIF and vends OpenCV-compatible frames by index."""
+
+    def __init__(self, gif_path, size=None):
+        """
+        gif_path : path to foot1.gif
+        size     : (w, h) to resize each frame, or None to keep original
+        """
+        gif = Image.open(gif_path)
+        self.frames = []
+        self.durations = []  # ms per frame (honours GIF timing if you need it)
+
+        try:
+            while True:
+                frame = gif.copy().convert("RGBA")
+                if size:
+                    frame = frame.resize(size, Image.LANCZOS)
+                # OpenCV uses BGR(A), Pillow gives RGBA
+                bgra = cv2.cvtColor(np.array(frame), cv2.COLOR_RGBA2BGRA)
+                self.frames.append(bgra)
+                self.durations.append(gif.info.get("duration", 100))
+                gif.seek(gif.tell() + 1)
+        except EOFError:
+            pass  # end of frames
+
+        self.n = len(self.frames)
+
+    def get_frame(self, t):
+        """Return the BGRA frame for global tick t (wraps automatically)."""
+        return self.frames[t % self.n]
+    
 
 # ---------------------------------------------------------------------------
 # Homography helpers
@@ -250,6 +282,8 @@ class ProjectionMapper:
         self.H_cam    = np.array(data["H_cam"],  dtype=np.float64)
         self.H_proj   = np.array(data["H_proj"], dtype=np.float64)
 
+        self.animator = GifAnimator("foot1.gif", size=(180,320))
+        self.tick = 0  # global frame counter, increment each render call
     # -- coordinate transforms -----------------------------------------------
 
     def cam_to_floor(self, cam_pt):
@@ -274,29 +308,69 @@ class ProjectionMapper:
         """Return a blank black floor-space canvas."""
         return np.zeros((self.floor_h, self.floor_w, 3), dtype=np.uint8)
 
+    # def do_stuff(self, floor_canvas, floor_pts, trail_pts=None):
+    #     """
+    #     PLACEHOLDER — replace the body of this function with your actual
+    #     animation logic.
+
+    #     floor_canvas : numpy array (floor_h x floor_w x 3), draw onto this
+    #     floor_pts    : list of (x,y) in floor space — current active positions
+    #     trail_pts    : optional list of (x,y) — the historical path to draw
+    #     """
+    #     # --- placeholder: draw a glowing dot at each active position --------
+    #     for pt in floor_pts:
+    #         x, y = int(pt[0]), int(pt[1])
+    #         cv2.circle(floor_canvas, (x, y), 18, (80, 80, 80), -1)   # outer glow
+    #         cv2.circle(floor_canvas, (x, y), 10, (0, 200, 255), -1)  # inner dot
+
+    #     # --- placeholder: draw the trail path --------------------------------
+    #     if trail_pts and len(trail_pts) > 1:
+    #         for i in range(1, len(trail_pts)):
+    #             p1 = (int(trail_pts[i-1][0]), int(trail_pts[i-1][1]))
+    #             p2 = (int(trail_pts[i][0]),   int(trail_pts[i][1]))
+    #             alpha = i / len(trail_pts)  # fade in toward the tip
+    #             color = (int(0*alpha), int(150*alpha), int(255*alpha))
+    #             cv2.line(floor_canvas, p1, p2, color, 3)
+
+    #     return floor_canvas
     def do_stuff(self, floor_canvas, floor_pts, trail_pts=None):
-        """
-        PLACEHOLDER — replace the body of this function with your actual
-        animation logic.
+        bgra_frame = self.animator.get_frame(self.tick)
+        fh, fw = bgra_frame.shape[:2]
+        alpha = bgra_frame[:, :, 3:4] / 255.0   # (fh, fw, 1) float mask
+        bgr   = bgra_frame[:, :, :3].astype(np.float32)
 
-        floor_canvas : numpy array (floor_h x floor_w x 3), draw onto this
-        floor_pts    : list of (x,y) in floor space — current active positions
-        trail_pts    : optional list of (x,y) — the historical path to draw
-        """
-        # --- placeholder: draw a glowing dot at each active position --------
         for pt in floor_pts:
-            x, y = int(pt[0]), int(pt[1])
-            cv2.circle(floor_canvas, (x, y), 18, (80, 80, 80), -1)   # outer glow
-            cv2.circle(floor_canvas, (x, y), 10, (0, 200, 255), -1)  # inner dot
+            cx, cy = int(pt[0]), int(pt[1])
 
-        # --- placeholder: draw the trail path --------------------------------
+            # Compute where the GIF frame sits on the floor canvas
+            x0, y0 = cx - fw // 2, cy - fh // 2
+            x1, y1 = x0 + fw, y0 + fh
+
+            # Clamp to canvas bounds
+            sx0 = max(0, -x0);  sx1 = sx0 + (min(x1, floor_canvas.shape[1]) - max(x0, 0))
+            sy0 = max(0, -y0);  sy1 = sy0 + (min(y1, floor_canvas.shape[0]) - max(y0, 0))
+            dx0 = max(x0, 0);   dx1 = dx0 + (sx1 - sx0)
+            dy0 = max(y0, 0);   dy1 = dy0 + (sy1 - sy0)
+
+            if sx1 <= sx0 or sy1 <= sy0:
+                continue  # fully off-canvas
+
+            # Slice the GIF frame and alpha mask to the visible region
+            src   = bgr  [sy0:sy1, sx0:sx1]
+            a     = alpha[sy0:sy1, sx0:sx1]
+            dst   = floor_canvas[dy0:dy1, dx0:dx1].astype(np.float32)
+
+            # Alpha composite: out = src * a + dst * (1 - a)
+            floor_canvas[dy0:dy1, dx0:dx1] = (src * a + dst * (1 - a)).astype(np.uint8)
+
+        # Optional: keep the trail as a faint underlay so you can see the path
         if trail_pts and len(trail_pts) > 1:
             for i in range(1, len(trail_pts)):
                 p1 = (int(trail_pts[i-1][0]), int(trail_pts[i-1][1]))
                 p2 = (int(trail_pts[i][0]),   int(trail_pts[i][1]))
-                alpha = i / len(trail_pts)  # fade in toward the tip
-                color = (int(0*alpha), int(150*alpha), int(255*alpha))
-                cv2.line(floor_canvas, p1, p2, color, 3)
+                fade = i / len(trail_pts)
+                color = (int(80 * fade), int(80 * fade), int(80 * fade))
+                cv2.line(floor_canvas, p1, p2, color, 2)
 
         return floor_canvas
 
@@ -310,6 +384,7 @@ class ProjectionMapper:
         if floor_pts:
             floor_canvas = self.do_stuff(floor_canvas, floor_pts, trail_pts)
 
+        self.tick += 1
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
         return proj_frame
 
