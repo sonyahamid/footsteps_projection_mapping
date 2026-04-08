@@ -61,10 +61,7 @@ class GifAnimator:
         return self.frames[t % self.n]
     
 
-# ---------------------------------------------------------------------------
 # Homography helpers
-# ---------------------------------------------------------------------------
-
 def compute_homography(src_pts, dst_pts):
     """Compute homography from 4 src points to 4 dst points."""
     src = np.array(src_pts, dtype=np.float32)
@@ -84,10 +81,6 @@ def warp_frame(H, frame, out_w, out_h):
     """Warp an entire image/frame using homography H."""
     return cv2.warpPerspective(frame, H, (out_w, out_h))
 
-
-# ---------------------------------------------------------------------------
-# Calibration
-# ---------------------------------------------------------------------------
 
 class Calibrator:
     """
@@ -246,10 +239,6 @@ class Calibrator:
         return data
 
 
-# ---------------------------------------------------------------------------
-# Runtime mapper  
-# ---------------------------------------------------------------------------
-
 class ProjectionMapper:
     """
     Load calibration and use it at runtime.
@@ -287,9 +276,6 @@ class ProjectionMapper:
             GifAnimator("white_foot2.gif", size=(27,54)),
             GifAnimator("white_foot3.gif", size=(27,54))
         ]
-
-        # self.animator_index = 0
-        # self.animator = self.animators[self.animator_index]
 
         self.tick = 0  # global frame counter
         
@@ -348,6 +334,7 @@ class ProjectionMapper:
         all_pts = (trail_pts if trail_pts else []) + list(floor_pts)
         n = len(all_pts)
 
+        # fade in and out for steps
         step_interval = 6
         steps_visible = min((self.tick // step_interval) + 1, n)
         visible_pts = all_pts[:steps_visible]
@@ -366,17 +353,7 @@ class ProjectionMapper:
             if fade == 0.0:
                 continue
 
-            # if i == steps_visible - 1:
-            #     frame_idx = self.animator.n - 1
-            # else:
-            #     frame_idx = self.tick
-
-            # random.seed(i)  # ensures the same animator for this step
-            # animator = random.choice(self.animators)
-            # bgra_frame = animator.get_frame(frame_idx)
-            random.seed(i)  # ensures the same animator for this step
             animator = random.choice(self.animators)
-
             if i == steps_visible - 1:
                 frame_idx = animator.n - 1
             else:
@@ -384,7 +361,7 @@ class ProjectionMapper:
 
             bgra_frame = animator.get_frame(frame_idx)
 
-            # ompute walking direction angle from neighbouring coords 
+            # compute walking direction angle from neighbouring coords 
             if i < len(visible_pts) - 1:
                 nx = visible_pts[i+1][0] - pt[0]
                 ny = visible_pts[i+1][1] - pt[1]
@@ -445,10 +422,7 @@ class ProjectionMapper:
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
         return proj_frame
 
-# ---------------------------------------------------------------------------
 # Manual calibration helper (no webcam needed — type your points directly)
-# ---------------------------------------------------------------------------
-
 def calibrate_from_known_points(
     cam_pts, # 4x (x,y) in camera pixel space,  order: TL TR BR BL
     proj_pts, # 4x (x,y) in projector pixel space, same order
