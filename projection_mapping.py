@@ -26,8 +26,6 @@ Dependencies: opencv-python, numpy
 import cv2
 import numpy as np
 import json
-import argparse
-from pathlib import Path
 from PIL import Image
 
 class GifAnimator:
@@ -283,7 +281,7 @@ class ProjectionMapper:
         self.H_proj   = np.array(data["H_proj"], dtype=np.float64)
 
         self.animator = GifAnimator("white_foot.gif", size=(27,54))
-        self.tick = 0  # global frame counter, increment each render call
+        self.tick = 0  # global frame counter
     # -- coordinate transforms -----------------------------------------------
 
     def cam_to_floor(self, cam_pt):
@@ -307,14 +305,6 @@ class ProjectionMapper:
     def make_floor_canvas(self):
         """Return a blank black floor-space canvas."""
         return np.zeros((self.floor_h, self.floor_w, 3), dtype=np.uint8)
-
-    # def rotate_image(self, img, angle_deg):
-    #     """Rotate a BGRA image by angle_deg around its center, keeping full size."""
-    #     h, w = img.shape[:2]
-    #     cx, cy = w // 2, h // 2
-    #     M = cv2.getRotationMatrix2D((cx, cy), -angle_deg, 1.0)
-    #     return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR,
-    #                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
     def rotate_image(self, img, angle_deg):
         """Rotate a BGRA image without cropping."""
@@ -372,7 +362,7 @@ class ProjectionMapper:
 
             bgra_frame = self.animator.get_frame(frame_idx)
 
-            # --- Compute walking direction angle from neighbouring points ---
+            # ompute walking direction angle from neighbouring coords 
             if i < len(visible_pts) - 1:
                 nx = visible_pts[i+1][0] - pt[0]
                 ny = visible_pts[i+1][1] - pt[1]
@@ -384,14 +374,14 @@ class ProjectionMapper:
 
             angle_deg = np.degrees(np.arctan2(ny, nx))
 
-            # Rotate the GIF frame to align with walking direction
+            # rotate the gif frame to align with walking direction
             bgra_rotated = self.rotate_image(bgra_frame, angle_deg+90)
 
             fh, fw = bgra_rotated.shape[:2]
             alpha = bgra_rotated[:, :, 3:4] / 255.0
             bgr   = bgra_rotated[:, :, :3].astype(np.float32)
 
-            # Left/right alternating offset perpendicular to walking direction
+            # left/right alternating offset perpendicular to walking direction
             length = max((nx**2 + ny**2) ** 0.5, 1)
             px, py = -ny / length, nx / length
             side = 1 if i % 2 == 0 else -1
@@ -399,7 +389,7 @@ class ProjectionMapper:
             cx = int(pt[0]) + int(px * offset * side)
             cy = int(pt[1]) + int(py * offset * side)
 
-            # Composite
+            # composite
             x0, y0 = cx - fw // 2, cy - fh // 2
             x1, y1 = x0 + fw, y0 + fh
 
@@ -419,7 +409,6 @@ class ProjectionMapper:
 
         return floor_canvas
     
-    
     def render_projector_frame(self, floor_pts=None, trail_pts=None):
         """
         Full pipeline: blank canvas -> draw animations -> warp to projector space.
@@ -434,21 +423,13 @@ class ProjectionMapper:
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
         return proj_frame
 
-    def rectify_cam_frame(self, cam_frame):
-        """
-        Warp a raw camera frame into floor (top-down) space.
-        Useful for debugging — not needed for the output pipeline.
-        """
-        return warp_frame(self.H_cam, cam_frame, self.floor_w, self.floor_h)
-
-
 # ---------------------------------------------------------------------------
 # Manual calibration helper (no webcam needed — type your points directly)
 # ---------------------------------------------------------------------------
 
 def calibrate_from_known_points(
-    cam_pts,        # 4x (x,y) in camera pixel space,  order: TL TR BR BL
-    proj_pts,       # 4x (x,y) in projector pixel space, same order
+    cam_pts, # 4x (x,y) in camera pixel space,  order: TL TR BR BL
+    proj_pts, # 4x (x,y) in projector pixel space, same order
     floor_w=1000,
     floor_h=1000,
     proj_w=1920,
@@ -485,64 +466,3 @@ def calibrate_from_known_points(
         json.dump(data, f, indent=2)
     print(f"Calibration saved to {out_path}")
     return data
-
-
-# ---------------------------------------------------------------------------
-# Demo loop (shows the pipeline end-to-end with a live webcam)
-# ---------------------------------------------------------------------------
-
-def demo_loop(calibration_path="calibration.json", cam_index=0):
-    mapper = ProjectionMapper(calibration_path)
-    cap = cv2.VideoCapture(cam_index)
-
-    # Simulated trail — in real use these come from your tracker
-    fake_trail = [(200 + i*20, 300 + i*10) for i in range(15)]
-
-    print("Demo running. Press Q to quit.")
-    while True:
-        ret, cam_frame = cap.read()
-        if not ret:
-            break
-
-        # Show rectified floor view (debug)
-        floor_view = mapper.rectify_cam_frame(cam_frame)
-
-        # Render projector output with placeholder animation
-        proj_out = mapper.render_projector_frame(
-            floor_pts=[fake_trail[-1]],
-            trail_pts=fake_trail,
-        )
-
-        cv2.imshow("floor (rectified)", floor_view)
-        cv2.imshow("projector output",  proj_out)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--calibrate", action="store_true", help="Run interactive calibration")
-    parser.add_argument("--demo",      action="store_true", help="Run demo loop after calibration")
-    parser.add_argument("--cam",       type=int, default=0,    help="Camera index")
-    parser.add_argument("--proj-w",    type=int, default=1920, help="Projector width px")
-    parser.add_argument("--proj-h",    type=int, default=1080, help="Projector height px")
-    parser.add_argument("--floor-w",   type=int, default=1000, help="Floor canvas width")
-    parser.add_argument("--floor-h",   type=int, default=1000, help="Floor canvas height")
-    parser.add_argument("--out",       default="calibration.json", help="Output calibration file")
-    args = parser.parse_args()
-
-    print(args)
-    if args.calibrate:
-        cal = Calibrator(args.cam, args.proj_w, args.proj_h, args.floor_w, args.floor_h)
-        cal.run_and_save(args.out)
-
-    if args.demo:
-        demo_loop(args.out, args.cam)
