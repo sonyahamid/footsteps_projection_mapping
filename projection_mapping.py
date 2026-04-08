@@ -282,7 +282,7 @@ class ProjectionMapper:
         self.H_cam    = np.array(data["H_cam"],  dtype=np.float64)
         self.H_proj   = np.array(data["H_proj"], dtype=np.float64)
 
-        self.animator = GifAnimator("foot1.gif", size=(180,320))
+        self.animator = GifAnimator("white_foot.gif", size=(27,54))
         self.tick = 0  # global frame counter, increment each render call
     # -- coordinate transforms -----------------------------------------------
 
@@ -308,72 +308,118 @@ class ProjectionMapper:
         """Return a blank black floor-space canvas."""
         return np.zeros((self.floor_h, self.floor_w, 3), dtype=np.uint8)
 
-    # def do_stuff(self, floor_canvas, floor_pts, trail_pts=None):
-    #     """
-    #     PLACEHOLDER — replace the body of this function with your actual
-    #     animation logic.
+    # def rotate_image(self, img, angle_deg):
+    #     """Rotate a BGRA image by angle_deg around its center, keeping full size."""
+    #     h, w = img.shape[:2]
+    #     cx, cy = w // 2, h // 2
+    #     M = cv2.getRotationMatrix2D((cx, cy), -angle_deg, 1.0)
+    #     return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR,
+    #                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
-    #     floor_canvas : numpy array (floor_h x floor_w x 3), draw onto this
-    #     floor_pts    : list of (x,y) in floor space — current active positions
-    #     trail_pts    : optional list of (x,y) — the historical path to draw
-    #     """
-    #     # --- placeholder: draw a glowing dot at each active position --------
-    #     for pt in floor_pts:
-    #         x, y = int(pt[0]), int(pt[1])
-    #         cv2.circle(floor_canvas, (x, y), 18, (80, 80, 80), -1)   # outer glow
-    #         cv2.circle(floor_canvas, (x, y), 10, (0, 200, 255), -1)  # inner dot
+    def rotate_image(self, img, angle_deg):
+        """Rotate a BGRA image without cropping."""
+        h, w = img.shape[:2]
 
-    #     # --- placeholder: draw the trail path --------------------------------
-    #     if trail_pts and len(trail_pts) > 1:
-    #         for i in range(1, len(trail_pts)):
-    #             p1 = (int(trail_pts[i-1][0]), int(trail_pts[i-1][1]))
-    #             p2 = (int(trail_pts[i][0]),   int(trail_pts[i][1]))
-    #             alpha = i / len(trail_pts)  # fade in toward the tip
-    #             color = (int(0*alpha), int(150*alpha), int(255*alpha))
-    #             cv2.line(floor_canvas, p1, p2, color, 3)
+        cx, cy = w / 2, h / 2
+        M = cv2.getRotationMatrix2D((cx, cy), -angle_deg, 1.0)
 
-    #     return floor_canvas
+        cos = abs(M[0, 0])
+        sin = abs(M[0, 1])
+
+        # compute new bounding dimensions
+        new_w = int((h * sin) + (w * cos))
+        new_h = int((h * cos) + (w * sin))
+
+        # adjust rotation matrix to center the image
+        M[0, 2] += (new_w / 2) - cx
+        M[1, 2] += (new_h / 2) - cy
+
+        return cv2.warpAffine(
+            img,
+            M,
+            (new_w, new_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0, 0)
+        )
+
     def do_stuff(self, floor_canvas, floor_pts, trail_pts=None):
-        bgra_frame = self.animator.get_frame(self.tick)
-        fh, fw = bgra_frame.shape[:2]
-        alpha = bgra_frame[:, :, 3:4] / 255.0   # (fh, fw, 1) float mask
-        bgr   = bgra_frame[:, :, :3].astype(np.float32)
+        all_pts = (trail_pts if trail_pts else []) + list(floor_pts)
+        n = len(all_pts)
 
-        for pt in floor_pts:
-            cx, cy = int(pt[0]), int(pt[1])
+        step_interval = 6
+        steps_visible = min((self.tick // step_interval) + 1, n)
+        visible_pts = all_pts[:steps_visible]
 
-            # Compute where the GIF frame sits on the floor canvas
+        fade_duration = 80
+
+        for i, pt in enumerate(visible_pts):
+            step_placed_at = i * step_interval
+            ticks_since_placed = self.tick - step_placed_at
+
+            if i == steps_visible - 1:
+                fade = 1.0
+            else:
+                fade = max(0.0, 1.0 - (ticks_since_placed / fade_duration))
+
+            if fade == 0.0:
+                continue
+
+            if i == steps_visible - 1:
+                frame_idx = self.animator.n - 1
+            else:
+                frame_idx = self.tick
+
+            bgra_frame = self.animator.get_frame(frame_idx)
+
+            # --- Compute walking direction angle from neighbouring points ---
+            if i < len(visible_pts) - 1:
+                nx = visible_pts[i+1][0] - pt[0]
+                ny = visible_pts[i+1][1] - pt[1]
+            elif i > 0:
+                nx = pt[0] - visible_pts[i-1][0]
+                ny = pt[1] - visible_pts[i-1][1]
+            else:
+                nx, ny = 1, 0
+
+            angle_deg = np.degrees(np.arctan2(ny, nx))
+
+            # Rotate the GIF frame to align with walking direction
+            bgra_rotated = self.rotate_image(bgra_frame, angle_deg+90)
+
+            fh, fw = bgra_rotated.shape[:2]
+            alpha = bgra_rotated[:, :, 3:4] / 255.0
+            bgr   = bgra_rotated[:, :, :3].astype(np.float32)
+
+            # Left/right alternating offset perpendicular to walking direction
+            length = max((nx**2 + ny**2) ** 0.5, 1)
+            px, py = -ny / length, nx / length
+            side = 1 if i % 2 == 0 else -1
+            offset = 18
+            cx = int(pt[0]) + int(px * offset * side)
+            cy = int(pt[1]) + int(py * offset * side)
+
+            # Composite
             x0, y0 = cx - fw // 2, cy - fh // 2
             x1, y1 = x0 + fw, y0 + fh
 
-            # Clamp to canvas bounds
             sx0 = max(0, -x0);  sx1 = sx0 + (min(x1, floor_canvas.shape[1]) - max(x0, 0))
             sy0 = max(0, -y0);  sy1 = sy0 + (min(y1, floor_canvas.shape[0]) - max(y0, 0))
             dx0 = max(x0, 0);   dx1 = dx0 + (sx1 - sx0)
             dy0 = max(y0, 0);   dy1 = dy0 + (sy1 - sy0)
 
             if sx1 <= sx0 or sy1 <= sy0:
-                continue  # fully off-canvas
+                continue
 
-            # Slice the GIF frame and alpha mask to the visible region
-            src   = bgr  [sy0:sy1, sx0:sx1]
-            a     = alpha[sy0:sy1, sx0:sx1]
-            dst   = floor_canvas[dy0:dy1, dx0:dx1].astype(np.float32)
+            src = bgr  [sy0:sy1, sx0:sx1]
+            a   = alpha[sy0:sy1, sx0:sx1] * fade
+            dst = floor_canvas[dy0:dy1, dx0:dx1].astype(np.float32)
 
-            # Alpha composite: out = src * a + dst * (1 - a)
             floor_canvas[dy0:dy1, dx0:dx1] = (src * a + dst * (1 - a)).astype(np.uint8)
 
-        # Optional: keep the trail as a faint underlay so you can see the path
-        if trail_pts and len(trail_pts) > 1:
-            for i in range(1, len(trail_pts)):
-                p1 = (int(trail_pts[i-1][0]), int(trail_pts[i-1][1]))
-                p2 = (int(trail_pts[i][0]),   int(trail_pts[i][1]))
-                fade = i / len(trail_pts)
-                color = (int(80 * fade), int(80 * fade), int(80 * fade))
-                cv2.line(floor_canvas, p1, p2, color, 2)
-
         return floor_canvas
-
+    
+    
     def render_projector_frame(self, floor_pts=None, trail_pts=None):
         """
         Full pipeline: blank canvas -> draw animations -> warp to projector space.

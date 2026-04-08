@@ -99,12 +99,16 @@ def draw_floor_corners(canvas):
 # Random trail
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_random_trail(n=20):
-    x, y = random.randint(150, 850), random.randint(150, 850)
+def make_random_trail(n=12):
+    x, y = random.randint(300, 700), random.randint(300, 700)
     pts = [(x, y)]
+    dx, dy = random.randint(-40, 40), random.randint(-40, 40)  # initial direction
     for _ in range(n - 1):
-        x = max(50, min(950, x + random.randint(-70, 70)))
-        y = max(50, min(950, y + random.randint(-70, 70)))
+        # Gradually steer rather than random jumps — feels more like walking
+        dx = dx + random.randint(-30, 30) * 0.3
+        dy = dy + random.randint(-30, 30) * 0.3
+        x = max(80, min(920, int(x + dx)))
+        y = max(80, min(920, int(y + dy)))
         pts.append((x, y))
     return pts
 
@@ -197,6 +201,7 @@ while True:
         break
     if key == ord('r'):
         trail = make_random_trail()
+        mapper.tick = 0  # reset so steps reveal from the beginning
         print("New trail:", trail)
 
 cv2.destroyAllWindows()
