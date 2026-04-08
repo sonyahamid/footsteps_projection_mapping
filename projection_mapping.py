@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 import json
 from PIL import Image
+import random
 
 class GifAnimator:
     """Pre-loads a GIF and vends OpenCV-compatible frames by index."""
@@ -280,8 +281,18 @@ class ProjectionMapper:
         self.H_cam    = np.array(data["H_cam"],  dtype=np.float64)
         self.H_proj   = np.array(data["H_proj"], dtype=np.float64)
 
-        self.animator = GifAnimator("white_foot.gif", size=(27,54))
+        # cycle through different step animations
+        self.animators = [
+            GifAnimator("white_foot.gif", size=(27,54)),
+            GifAnimator("white_foot2.gif", size=(27,54)),
+            GifAnimator("white_foot3.gif", size=(27,54))
+        ]
+
+        # self.animator_index = 0
+        # self.animator = self.animators[self.animator_index]
+
         self.tick = 0  # global frame counter
+        
     # -- coordinate transforms -----------------------------------------------
 
     def cam_to_floor(self, cam_pt):
@@ -355,12 +366,23 @@ class ProjectionMapper:
             if fade == 0.0:
                 continue
 
+            # if i == steps_visible - 1:
+            #     frame_idx = self.animator.n - 1
+            # else:
+            #     frame_idx = self.tick
+
+            # random.seed(i)  # ensures the same animator for this step
+            # animator = random.choice(self.animators)
+            # bgra_frame = animator.get_frame(frame_idx)
+            random.seed(i)  # ensures the same animator for this step
+            animator = random.choice(self.animators)
+
             if i == steps_visible - 1:
-                frame_idx = self.animator.n - 1
+                frame_idx = animator.n - 1
             else:
                 frame_idx = self.tick
 
-            bgra_frame = self.animator.get_frame(frame_idx)
+            bgra_frame = animator.get_frame(frame_idx)
 
             # ompute walking direction angle from neighbouring coords 
             if i < len(visible_pts) - 1:
