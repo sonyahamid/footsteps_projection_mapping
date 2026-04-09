@@ -2,6 +2,11 @@
 
 This project is a small **projection mapping prototype** that simulates footsteps appearing on a floor. It demonstrates how coordinates from a **camera view** can be mapped onto a **flat floor surface**, animated there, and then warped into a **projector output** so the animation appears correctly on the physical floor.
 
+The live frontend now opens two windows:
+
+1. **Debug** - webcam preview with draggable corner markers for floor alignment.
+2. **Projector output** - the final warped frame with only the footsteps animation and text.
+
 The demo shows how projection mapping works by visualizing three stages of the pipeline:
 
 1. **Floor space (top-down view)** – where the footsteps are generated and animated.
@@ -98,7 +103,7 @@ Q  → quit
 R  → generate a new random walking trail
 ```
 
-Three windows will appear showing the different stages of the projection mapping process.
+Two windows will appear: the debug calibration view and the final projector output.
 
 
 # Files
