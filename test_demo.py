@@ -343,13 +343,13 @@ def main():
                     matched_trails.append({"trail": trail, "age_str": age_str})
 
             projected_frame = mapper.render_projector_frame(
-                person_trails=person_trails,
+                person_trails=[],  # Only show history paths
                 matched_trails=matched_trails,
             )
 
             webcam_frame = webcam.read()
             if webcam_frame is None:
-                debug_base = render_debug_fallback(mapper, person_trails, matched_trails)
+                debug_base = render_debug_fallback(mapper, [], matched_trails)
             else:
                 debug_base = webcam_frame
 
