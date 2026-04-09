@@ -5,9 +5,9 @@ The runtime now uses two windows:
   1. Debug window: webcam preview with draggable calibration points.
   2. Projector window: the final warped frame that gets sent to the projector.
 
-The debug window lets you drag the four camera-space corner markers to align the
-floor quadrilateral. The projector window intentionally stays clean: only the
-footstep animation and path text are rendered there.
+Press G to toggle a verification grid on the projector output.
+The grid is drawn in floor space then warped through H_proj, so you can
+lay tape on the floor in a matching grid and check alignment visually.
 """
 
 from __future__ import annotations
@@ -250,7 +250,7 @@ def render_debug_fallback(mapper, person_trails, matched_trails=None, cam_w=CAM_
     return cv2.warpPerspective(canvas, H_cam_inv, (cam_w, cam_h))
 
 
-def render_webcam_overlay(frame, editor):
+def render_webcam_overlay(frame, editor, show_grid=False):
     out = frame.copy()
     points = editor.as_tuples()
 
@@ -273,6 +273,19 @@ def render_webcam_overlay(frame, editor):
         (240, 240, 240),
         2,
     )
+
+    # Grid status indicator in the corner
+    grid_label = "[G] Grid: ON" if show_grid else "[G] Grid: off"
+    grid_color = (0, 255, 200) if show_grid else (160, 160, 160)
+    cv2.putText(
+        out,
+        grid_label,
+        (12, out.shape[0] - 32),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        grid_color,
+        1,
+    )
     cv2.putText(
         out,
         "Q to quit",
@@ -291,11 +304,13 @@ def main():
     editor = DraggableCalibration(cam_pts)
     current_h_cam = mapper.H_cam.copy()
 
+    show_grid = False  # toggle with G
+
     cv2.namedWindow(DEBUG_WINDOW, cv2.WINDOW_NORMAL)
     cv2.namedWindow(PROD_WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(DEBUG_WINDOW, editor.mouse_callback)
 
-    print("Q = quit")
+    print("Q = quit | G = toggle projection grid")
 
     selected_pid = None
 
@@ -356,13 +371,24 @@ def main():
                 matched_trails=matched_trails,
             )
 
+            # Camera passthrough mode (G):
+            # Warp the raw webcam frame through H_cam (cam -> floor) then
+            # H_proj (floor -> projector). The projector output should look
+            # like a clean, undistorted top-down view of the calibrated floor
+            # area. If the geometry is correct the image will appear flat and
+            # rectilinear — no perspective skew, corners stable.
+            if show_grid and webcam_frame is not None:
+                from projection_mapping import warp_frame
+                floor_from_cam = warp_frame(mapper.H_cam, webcam_frame, FLOOR_W, FLOOR_H)
+                projected_frame = warp_frame(mapper.H_proj, floor_from_cam, PROJ_W, PROJ_H)
+
             webcam_frame = webcam.read()
             if webcam_frame is None:
                 debug_base = render_debug_fallback(mapper, [], matched_trails)
             else:
                 debug_base = webcam_frame
 
-            debug_frame = render_webcam_overlay(debug_base, editor)
+            debug_frame = render_webcam_overlay(debug_base, editor, show_grid)
 
             cv2.imshow(DEBUG_WINDOW, debug_frame)
             cv2.imshow(PROD_WINDOW, projected_frame)
@@ -370,6 +396,9 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or key == 27:
                 break
+            elif key == ord("g"):
+                show_grid = not show_grid
+                print(f"Grid {'ON' if show_grid else 'off'}")
     finally:
         webcam.release()
         cv2.destroyAllWindows()
