@@ -274,7 +274,7 @@ def render_debug_fallback(mapper, person_trails, matched_trails=None, cam_w=CAM_
     return cv2.warpPerspective(canvas, H_cam_inv, (cam_w, cam_h))
 
 
-def render_webcam_overlay(frame, editor, show_grid=False, show_camera=False):
+def render_webcam_overlay(frame, editor, show_grid=False, show_camera=False, show_proj_editor=False):
     out = frame.copy()
     points = editor.as_tuples()
 
@@ -307,9 +307,15 @@ def render_webcam_overlay(frame, editor, show_grid=False, show_camera=False):
     cam_color = (0, 200, 255) if show_camera else (160, 160, 160)
     cv2.putText(out, cam_label, (12, out.shape[0] - 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, cam_color, 1)
+                
+    proj_label = "[P] Proj Editor: ON" if show_proj_editor else "[P] Proj Editor: off"
+    proj_color = (0, 255, 200) if show_proj_editor else (160, 160, 160)
+    cv2.putText(out, proj_label, (12, out.shape[0] - 64),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, proj_color, 1)
+
     cv2.putText(
         out,
-        "Q to quit",
+        "Q to quit | S to save",
         (12, out.shape[0] - 14),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
@@ -318,6 +324,32 @@ def render_webcam_overlay(frame, editor, show_grid=False, show_camera=False):
     )
     return out
 
+
+def render_projector_overlay(frame, editor):
+    out = frame.copy()
+    points = editor.as_tuples()
+
+    for index, ((x, y), label, color) in enumerate(zip(points, CORNER_LABELS, CORNER_COLORS)):
+        radius = 10 if editor.active_index == index else 8
+        line_thickness = 3 if editor.active_index == index else 2
+        cv2.circle(out, (x, y), radius + 3, (255, 255, 255), 1)
+        cv2.circle(out, (x, y), radius, color, -1)
+        offset_x = x + 12 if x < out.shape[1] // 2 else x - 32
+        cv2.putText(out, label, (offset_x, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, line_thickness)
+
+    pts = np.array(points, np.int32).reshape((-1, 1, 2))
+    cv2.polylines(out, [pts], True, (220, 220, 220), 1)
+    
+    cv2.putText(
+        out,
+        "Drag TL/TR/BR/BL to align the projector output map",
+        (12, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (240, 240, 240),
+        2,
+    )
+    return out
 
 def _draw_floor_grid(canvas, floor_w=FLOOR_W, floor_h=FLOOR_H, divisions=10):
     """Draw a verification grid in floor space before H_proj warp."""
@@ -351,17 +383,21 @@ def main():
     udp_receiver = FootstepUDPReceiver(7000)
     webcam = WebcamPreview(WEBCAM_INDEX)
     editor = DraggableCalibration(cam_pts)
+    proj_editor = DraggableCalibration(proj_pts)
     current_h_cam = mapper.H_cam.copy()
+    current_h_proj = mapper.H_proj.copy()
     webcam_frame = None
 
     show_grid = False    # G 
     show_camera = False  # C 
+    show_proj_editor = False # P
 
     cv2.namedWindow(DEBUG_WINDOW, cv2.WINDOW_NORMAL)
     cv2.namedWindow(PROD_WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(DEBUG_WINDOW, editor.mouse_callback)
+    cv2.setMouseCallback(PROD_WINDOW, proj_editor.mouse_callback)
 
-    print("Q = quit | G = toggle grid | C = toggle camera passthrough | S = save calibration data")
+    print("Q = quit | G = toggle grid | C = toggle camera passthrough | P = toggle projector map editor | S = save calibration data")
 
     selected_pid = None
 
@@ -374,6 +410,12 @@ def main():
             if candidate_h_cam is not None:
                 current_h_cam = candidate_h_cam
             mapper.H_cam = current_h_cam
+
+            current_proj_pts = proj_editor.as_tuples()
+            candidate_h_proj = compute_homography(FLOOR_CORNERS, current_proj_pts)
+            if candidate_h_proj is not None:
+                current_h_proj = candidate_h_proj
+            mapper.H_proj = current_h_proj
 
             person_trails = []
             for pid, data in udp_receiver.people.items():
@@ -436,18 +478,44 @@ def main():
                 floor_from_cam = warp_frame(mapper.H_cam, webcam_frame, FLOOR_W, FLOOR_H)
                 projected_frame = warp_frame(mapper.H_proj, floor_from_cam, PROJ_W, PROJ_H)
 
+            if show_proj_editor:
+                projected_frame = render_projector_overlay(projected_frame, proj_editor)
+
             if webcam_frame is None:
                 debug_base = render_debug_fallback(mapper, [], matched_trails)
             else:
                 debug_base = webcam_frame
 
-            debug_frame = render_webcam_overlay(debug_base, editor, show_grid, show_camera)
+            debug_frame = render_webcam_overlay(debug_base, editor, show_grid, show_camera, show_proj_editor)
 
             cv2.imshow(DEBUG_WINDOW, debug_frame)
             cv2.imshow(PROD_WINDOW, projected_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q") or key == 27:
+                break
+            elif key == ord("g"):
+                show_grid = not show_grid
+            elif key == ord("c"):
+                show_camera = not show_camera
+            elif key == ord("p"):
+                show_proj_editor = not show_proj_editor
+            elif key == ord("s"):
+                # Save calibration
+                data = {
+                    "cam_pts": current_cam_pts,
+                    "proj_pts": current_proj_pts,
+                    "floor_corners": FLOOR_CORNERS,
+                    "floor_w": FLOOR_W,
+                    "floor_h": FLOOR_H,
+                    "proj_w": PROJ_W,
+                    "proj_h": PROJ_H,
+                    "H_cam": current_h_cam.tolist(),
+                    "H_proj": current_h_proj.tolist(),
+                }
+                with open(CALIBRATION_PATH, "w") as f:
+                    json.dump(data, f, indent=2)
+                print(f"[{time.strftime('%H:%M:%S')}] Calibration saved to {CALIBRATION_PATH}")
                 break
             elif key == ord("g"):
                 show_grid = not show_grid
