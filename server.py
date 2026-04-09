@@ -9,7 +9,7 @@ import websockets
 import time
 
 from udp_receiver import FootstepReceiver
-from projection_mapping import calibrate_from_known_points
+from projection_mapping import calibrate_from_known_points, ProjectionMapper
 
 PORT_HTTP = 8000
 PORT_WS = 8001
@@ -75,10 +75,8 @@ async def data_loop():
     receiver = FootstepReceiver(port=7000)
     
     # Load basic configuration based on python mapper logic
-    with open(CALIBRATION_FILE) as f:
-        calib = json.load(f)
-        floor_w = calib["floor_w"]
-        floor_h = calib["floor_h"]
+    mapper = ProjectionMapper(CALIBRATION_FILE)
+    CAM_W, CAM_H = 640, 480
 
     last_calib_mtime = os.path.getmtime(CALIBRATION_FILE)
 
@@ -92,10 +90,9 @@ async def data_loop():
             current_mtime = os.path.getmtime(CALIBRATION_FILE)
             if current_mtime != last_calib_mtime:
                 last_calib_mtime = current_mtime
+                mapper = ProjectionMapper(CALIBRATION_FILE)
                 with open(CALIBRATION_FILE) as f:
                     calib = json.load(f)
-                    floor_w = calib["floor_w"]
-                    floor_h = calib["floor_h"]
                     logger.info("Calibration file updated, broadcasting new parameters...")
                     await broadcast_data({"type": "calibration", "data": calib})
         except Exception:
@@ -108,7 +105,10 @@ async def data_loop():
         if trails:
             # Map all active live trails into floor space
             for pid, pts in trails.items():
-                floor_pts = [{"x": p[0] * floor_w, "y": p[1] * floor_h} for p in pts]
+                floor_pts = []
+                for p in pts:
+                    fx, fy = mapper.cam_to_floor((p[0] * CAM_W, p[1] * CAM_H))
+                    floor_pts.append({"x": fx, "y": fy})
                 person_trails[pid] = floor_pts
 
         current_time = time.time()
@@ -151,7 +151,10 @@ async def data_loop():
 
         matched_trails = {}
         for pid, data in active_history_paths.items():
-            floor_pts = [{"x": p[0] * floor_w, "y": p[1] * floor_h} for p in data["path"]]
+            floor_pts = []
+            for p in data["path"]:
+                fx, fy = mapper.cam_to_floor((p[0] * CAM_W, p[1] * CAM_H))
+                floor_pts.append({"x": fx, "y": fy})
             if floor_pts:
                 matched_trails[pid] = {
                     "trail": floor_pts,
