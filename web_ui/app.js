@@ -10,6 +10,13 @@ let projectionCalibration = null;
 // Generate unique DOM elements per footprint or text
 const activeDOMEls = new Map(); 
 
+// Listen for 'g' to toggle debug grid
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'g' || e.key === 'G') {
+        floorCanvas.classList.toggle('debug-grid');
+    }
+});
+
 ws.onopen = () => {
     console.log('Connected to Projection Mapping Websocket');
 };
