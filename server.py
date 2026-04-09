@@ -6,17 +6,26 @@ import threading
 import http.server
 import socketserver
 import websockets
-import cv2
 import time
 
 from udp_receiver import FootstepReceiver
+from projection_mapping import calibrate_from_known_points
 
 PORT_HTTP = 8000
 PORT_WS = 8001
-CALIBRATION_FILE = "calibration_test.json"
+CALIBRATION_FILE = "calibration.json"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ProjectionServer")
+
+def ensure_calibration_exists():
+    if not os.path.exists(CALIBRATION_FILE):
+        logger.info(f"{CALIBRATION_FILE} not found. Generating default calibration.")
+        calibrate_from_known_points(
+            cam_pts=[[110, 90], [530, 90], [590, 430], [50, 430]],
+            proj_pts=[(160, 80), (1760, 80), (1840, 1000), (80, 1000)],
+            out_path=CALIBRATION_FILE
+        )
 
 # --- HTTP Server ---
 def run_http_server():
@@ -71,11 +80,26 @@ async def data_loop():
         floor_w = calib["floor_w"]
         floor_h = calib["floor_h"]
 
+    last_calib_mtime = os.path.getmtime(CALIBRATION_FILE)
+
     active_history_paths = {}  # pid -> {"path": [...], "fade": 1.0, "fade_start": None}
 
     while True:
         # Match python projection map 60fps ~ 0.016s sleep
         await asyncio.sleep(1/60.0)
+        
+        try:
+            current_mtime = os.path.getmtime(CALIBRATION_FILE)
+            if current_mtime != last_calib_mtime:
+                last_calib_mtime = current_mtime
+                with open(CALIBRATION_FILE) as f:
+                    calib = json.load(f)
+                    floor_w = calib["floor_w"]
+                    floor_h = calib["floor_h"]
+                    logger.info("Calibration file updated, broadcasting new parameters...")
+                    await broadcast_data({"type": "calibration", "data": calib})
+        except Exception:
+            pass
         
         trails = receiver.get_trails()
         matched = receiver.get_matched_paths()
@@ -144,6 +168,8 @@ async def data_loop():
         await broadcast_data(payload)
 
 async def main():
+    ensure_calibration_exists()
+    
     # Start HTTP server background thread
     threading.Thread(target=run_http_server, daemon=True).start()
     

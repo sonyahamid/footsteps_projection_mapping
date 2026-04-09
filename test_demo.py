@@ -111,6 +111,9 @@ def draw_floor_corners(canvas):
 class FootstepUDPReceiver:
     def __init__(self, port=7000):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Allow reusing the port for UDP to prevent "Address already in use" crashes upon restart
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.sock.bind(("0.0.0.0", port))
         self.sock.setblocking(False)
         self.people = {}
