@@ -98,6 +98,7 @@ def draw_floor_corners(canvas):
 # UDP Receiver
 # ─────────────────────────────────────────────────────────────────────────────
 import socket
+import time
 
 class FootstepUDPReceiver:
     def __init__(self, port=7000):
@@ -105,7 +106,7 @@ class FootstepUDPReceiver:
         # Bind to all interfaces, port 7000
         self.sock.bind(("0.0.0.0", port))
         self.sock.setblocking(False)
-        self.people = {} # person_id -> { "pos": (x,y), "history": [(hx,hy), ...] }
+        self.people = {} # person_id -> { "pos": (x,y), "history": [(hx,hy), ...], "last_seen": time.time() }
 
     def poll(self):
         try:
@@ -114,6 +115,7 @@ class FootstepUDPReceiver:
                 if not data:
                     break
                 text = data.decode("utf-8").strip()
+                now = time.time()
                 for line in text.split('\n'):
                     if not line: continue
                     parts = line.split()
@@ -132,12 +134,19 @@ class FootstepUDPReceiver:
                                 
                         self.people[person_id] = {
                             "pos": (x, y),
-                            "history": history
+                            "history": history,
+                            "last_seen": now
                         }
         except BlockingIOError:
             pass
         except Exception as e:
             pass
+
+        # Cleanup dead tracks
+        now = time.time()
+        dead_ids = [pid for pid, data in self.people.items() if now - data["last_seen"] > 1.0]
+        for pid in dead_ids:
+            del self.people[pid]
 
 udp_receiver = FootstepUDPReceiver(7000)
 

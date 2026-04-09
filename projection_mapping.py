@@ -334,27 +334,15 @@ class ProjectionMapper:
         all_pts = (trail_pts if trail_pts else []) + list(floor_pts)
         n = len(all_pts)
 
-        # fade in and out for steps
-        step_interval = 6
-        steps_visible = min((self.tick // step_interval) + 1, n)
-        visible_pts = all_pts[:steps_visible]
-
-        fade_duration = 80
-
-        for i, pt in enumerate(visible_pts):
-            step_placed_at = i * step_interval
-            ticks_since_placed = self.tick - step_placed_at
-
-            if i == steps_visible - 1:
+        for i, pt in enumerate(all_pts):
+            if i == n - 1:
                 fade = 1.0
             else:
-                fade = max(0.0, 1.0 - (ticks_since_placed / fade_duration))
+                age_idx = n - 1 - i
+                fade = max(0.2, 1.0 - (age_idx * 0.05))
 
-            if fade == 0.0:
-                continue
-
-            animator = random.choice(self.animators)
-            if i == steps_visible - 1:
+            animator = self.animators[i % len(self.animators)]
+            if i == n - 1:
                 frame_idx = animator.n - 1
             else:
                 frame_idx = self.tick
@@ -362,12 +350,12 @@ class ProjectionMapper:
             bgra_frame = animator.get_frame(frame_idx)
 
             # compute walking direction angle from neighbouring coords 
-            if i < len(visible_pts) - 1:
-                nx = visible_pts[i+1][0] - pt[0]
-                ny = visible_pts[i+1][1] - pt[1]
+            if i < n - 1:
+                nx = all_pts[i+1][0] - pt[0]
+                ny = all_pts[i+1][1] - pt[1]
             elif i > 0:
-                nx = pt[0] - visible_pts[i-1][0]
-                ny = pt[1] - visible_pts[i-1][1]
+                nx = pt[0] - all_pts[i-1][0]
+                ny = pt[1] - all_pts[i-1][1]
             else:
                 nx, ny = 1, 0
 
