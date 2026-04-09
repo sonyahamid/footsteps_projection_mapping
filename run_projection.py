@@ -45,7 +45,8 @@ def main():
                 selected_pid = random.choice(list(trails.keys()))
             
             pts = trails[selected_pid]
-            floor_pts = [(p[0] * mapper.floor_w, p[1] * mapper.floor_h) for p in pts]
+            # Convert normalized camera coordinates to pixel coordinates, then to floor space
+            floor_pts = [mapper.cam_to_floor((p[0] * frame.shape[1], p[1] * frame.shape[0])) for p in pts]
             person_trails_floor.append(floor_pts)
         else:
             selected_pid = None
@@ -87,12 +88,19 @@ def main():
         # Prepare matched trails for projection mapping
         matched_trails_floor = []
         for pid, data in active_history_paths.items():
-            floor_pts = [(p[0] * mapper.floor_w, p[1] * mapper.floor_h) for p in data["path"]]
+            if 'pts' in data["path"]:
+                path_pts = data["path"]["pts"]
+                age_str = f"Seen {int(data['path']['age_secs'])}s ago"
+            else:
+                path_pts = data["path"]
+                age_str = ""
+
+            floor_pts = [mapper.cam_to_floor((p[0] * frame.shape[1], p[1] * frame.shape[0])) for p in path_pts]
             if floor_pts:
                 matched_trails_floor.append({
                     "trail": floor_pts,
                     "fade": data["fade"],
-                    "age_str": ""
+                    "age_str": age_str
                 })
 
         proj_frame = mapper.render_projector_frame(
