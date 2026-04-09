@@ -19,7 +19,7 @@ import random
 import cv2
 import numpy as np
 
-from projection_mapping import ProjectionMapper, calibrate_from_known_points, compute_homography
+from projection_mapping import ProjectionMapper, calibrate_from_known_points, compute_homography, warp_frame
 
 CAM_W, CAM_H = 640, 480
 PROJ_W, PROJ_H = 1920, 1080
@@ -82,6 +82,7 @@ def draw_floor_corners(canvas):
     ).reshape((-1, 1, 2))
     cv2.polylines(canvas, [pts], True, (80, 80, 80), 1)
     return canvas
+
 
 
 class FootstepUDPReceiver:
@@ -250,7 +251,7 @@ def render_debug_fallback(mapper, person_trails, matched_trails=None, cam_w=CAM_
     return cv2.warpPerspective(canvas, H_cam_inv, (cam_w, cam_h))
 
 
-def render_webcam_overlay(frame, editor, show_grid=False):
+def render_webcam_overlay(frame, editor, show_grid=False, show_camera=False):
     out = frame.copy()
     points = editor.as_tuples()
 
@@ -274,18 +275,15 @@ def render_webcam_overlay(frame, editor, show_grid=False):
         2,
     )
 
-    # Grid status indicator in the corner
     grid_label = "[G] Grid: ON" if show_grid else "[G] Grid: off"
     grid_color = (0, 255, 200) if show_grid else (160, 160, 160)
-    cv2.putText(
-        out,
-        grid_label,
-        (12, out.shape[0] - 32),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        grid_color,
-        1,
-    )
+    cv2.putText(out, grid_label, (12, out.shape[0] - 48),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, grid_color, 1)
+
+    cam_label = "[C] Camera: ON" if show_camera else "[C] Camera: off"
+    cam_color = (0, 200, 255) if show_camera else (160, 160, 160)
+    cv2.putText(out, cam_label, (12, out.shape[0] - 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, cam_color, 1)
     cv2.putText(
         out,
         "Q to quit",
@@ -298,19 +296,49 @@ def render_webcam_overlay(frame, editor, show_grid=False):
     return out
 
 
+def _draw_floor_grid(canvas, floor_w=FLOOR_W, floor_h=FLOOR_H, divisions=10):
+    """Draw a verification grid in floor space before H_proj warp."""
+    step_x = floor_w // divisions
+    step_y = floor_h // divisions
+
+    for i in range(divisions + 1):
+        bright = (i % 5 == 0)
+        color = (0, 220, 220) if bright else (0, 80, 80)
+        thickness = 2 if bright else 1
+        x = i * step_x
+        cv2.line(canvas, (x, 0), (x, floor_h), color, thickness)
+        y = i * step_y
+        cv2.line(canvas, (0, y), (floor_w, y), color, thickness)
+        if bright:
+            for j in range(0, divisions + 1, 5):
+                y2 = j * step_y
+                cv2.putText(canvas, f"{x},{y2}", (x + 4, y2 + 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 255, 255), 1, cv2.LINE_AA)
+
+    cv2.rectangle(canvas, (0, 0), (floor_w - 1, floor_h - 1), (0, 255, 180), 2)
+    for cx, cy, lbl in [(6, 18, "TL"), (floor_w-38, 18, "TR"),
+                        (floor_w-38, floor_h-6, "BR"), (6, floor_h-6, "BL")]:
+        cv2.putText(canvas, lbl, (cx, cy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 180), 2, cv2.LINE_AA)
+    return canvas
+
+
+
 def main():
     udp_receiver = FootstepUDPReceiver(7000)
     webcam = WebcamPreview(WEBCAM_INDEX)
     editor = DraggableCalibration(cam_pts)
     current_h_cam = mapper.H_cam.copy()
+    webcam_frame = None
 
-    show_grid = False  # toggle with G
+    show_grid = False    # G 
+    show_camera = False  # C 
 
     cv2.namedWindow(DEBUG_WINDOW, cv2.WINDOW_NORMAL)
     cv2.namedWindow(PROD_WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(DEBUG_WINDOW, editor.mouse_callback)
 
-    print("Q = quit | G = toggle projection grid")
+    print("Q = quit | G = toggle grid | C = toggle camera passthrough")
 
     selected_pid = None
 
@@ -371,24 +399,26 @@ def main():
                 matched_trails=matched_trails,
             )
 
-            # Camera passthrough mode (G):
-            # Warp the raw webcam frame through H_cam (cam -> floor) then
-            # H_proj (floor -> projector). The projector output should look
-            # like a clean, undistorted top-down view of the calibrated floor
-            # area. If the geometry is correct the image will appear flat and
-            # rectilinear — no perspective skew, corners stable.
-            if show_grid and webcam_frame is not None:
-                from projection_mapping import warp_frame
+            webcam_frame = webcam.read()
+            if show_grid:
+                grid_canvas = mapper.make_floor_canvas()
+                _draw_floor_grid(grid_canvas)
+                grid_warped = warp_frame(mapper.H_proj, grid_canvas, PROJ_W, PROJ_H)
+                mask = cv2.cvtColor(grid_warped, cv2.COLOR_BGR2GRAY)
+                _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+                mask_3ch = cv2.merge([mask, mask, mask])
+                projected_frame = np.where(mask_3ch > 0, grid_warped, projected_frame)
+
+            if show_camera and webcam_frame is not None:
                 floor_from_cam = warp_frame(mapper.H_cam, webcam_frame, FLOOR_W, FLOOR_H)
                 projected_frame = warp_frame(mapper.H_proj, floor_from_cam, PROJ_W, PROJ_H)
 
-            webcam_frame = webcam.read()
             if webcam_frame is None:
                 debug_base = render_debug_fallback(mapper, [], matched_trails)
             else:
                 debug_base = webcam_frame
 
-            debug_frame = render_webcam_overlay(debug_base, editor, show_grid)
+            debug_frame = render_webcam_overlay(debug_base, editor, show_grid, show_camera)
 
             cv2.imshow(DEBUG_WINDOW, debug_frame)
             cv2.imshow(PROD_WINDOW, projected_frame)
@@ -399,6 +429,9 @@ def main():
             elif key == ord("g"):
                 show_grid = not show_grid
                 print(f"Grid {'ON' if show_grid else 'off'}")
+            elif key == ord("c"):
+                show_camera = not show_camera
+                print(f"Camera passthrough {'ON' if show_camera else 'off'}")
     finally:
         webcam.release()
         cv2.destroyAllWindows()
