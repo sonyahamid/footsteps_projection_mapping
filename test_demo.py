@@ -128,9 +128,9 @@ class FootstepUDPReceiver:
                             history = []
                             idx = 4
                             for _ in range(history_length):
-                                if idx + 1 < len(parts):
-                                    history.append((float(parts[idx]), float(parts[idx+1])))
-                                    idx += 2
+                                if idx + 3 < len(parts):
+                                    history.append((float(parts[idx]), float(parts[idx+1]), float(parts[idx+2]), float(parts[idx+3])))
+                                    idx += 4
                             
                             self.matches[person_id] = {
                                 "age": age_secs,
@@ -138,21 +138,23 @@ class FootstepUDPReceiver:
                                 "last_seen": now
                             }
                     else:
-                        if len(parts) >= 4:
+                        if len(parts) >= 6:
                             x = float(parts[0])
                             y = float(parts[1])
-                            person_id = int(parts[2])
-                            history_length = int(parts[3])
+                            dx = float(parts[2])
+                            dy = float(parts[3])
+                            person_id = int(parts[4])
+                            history_length = int(parts[5])
                             
                             history = []
-                            idx = 4
+                            idx = 6
                             for _ in range(history_length):
-                                if idx + 1 < len(parts):
-                                    history.append((float(parts[idx]), float(parts[idx+1])))
-                                    idx += 2
+                                if idx + 3 < len(parts):
+                                    history.append((float(parts[idx]), float(parts[idx+1]), float(parts[idx+2]), float(parts[idx+3])))
+                                    idx += 4
                                     
                             self.people[person_id] = {
-                                "pos": (x, y),
+                                "pos": (x, y, dx, dy),
                                 "history": history,
                                 "last_seen": now
                             }
@@ -234,9 +236,15 @@ while True:
         # Note: Depending on your real camera, the W/H might be different here
         # but for this visualisation we map them to the 640x480 cam bounds defined
         trail = []
-        for hx, hy in data["history"]:
+        for hx, hy, hdx, hdy in data["history"]:
             hcx, hcy = hx * CAM_W, hy * CAM_H
-            trail.append(mapper.cam_to_floor((hcx, hcy)))
+            fx, fy = mapper.cam_to_floor((hcx, hcy))
+            # project the direction point as well to get floor space direction
+            hx2 = hcx + hdx * 50.0  # arbitrary small scale for direction
+            hy2 = hcy + hdy * 50.0
+            fx2, fy2 = mapper.cam_to_floor((hx2, hy2))
+            
+            trail.append((fx, fy, fx2 - fx, fy2 - fy))
             
         if trail:
             person_trails.append(trail)
@@ -244,9 +252,14 @@ while True:
     matched_trails = []
     for pid, data in udp_receiver.matches.items():
         trail = []
-        for hx, hy in data["history"]:
+        for hx, hy, hdx, hdy in data["history"]:
             hcx, hcy = hx * CAM_W, hy * CAM_H
-            trail.append(mapper.cam_to_floor((hcx, hcy)))
+            fx, fy = mapper.cam_to_floor((hcx, hcy))
+            hx2 = hcx + hdx * 50.0
+            hy2 = hcy + hdy * 50.0
+            fx2, fy2 = mapper.cam_to_floor((hx2, hy2))
+            
+            trail.append((fx, fy, fx2 - fx, fy2 - fy))
             
         if trail:
             age_secs = data["age"]

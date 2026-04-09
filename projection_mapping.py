@@ -359,6 +359,19 @@ class ProjectionMapper:
             else:
                 nx, ny = 1, 0
 
+            # normalize path vector
+            plen = max((nx**2 + ny**2) ** 0.5, 1e-5)
+            nx, ny = nx / plen, ny / plen
+
+            if len(pt) >= 4:
+                # we have a hardware direction vector (already in floor space from test_demo)
+                dx, dy = pt[2], pt[3]
+                dlen = max((dx**2 + dy**2) ** 0.5, 1e-5)
+                if dlen > 1e-3:
+                    dx, dy = dx / dlen, dy / dlen
+                    # average vectors
+                    nx, ny = (nx + dx) / 2.0, (ny + dy) / 2.0
+            
             angle_deg = np.degrees(np.arctan2(ny, nx))
 
             # rotate the gif frame to align with walking direction
@@ -394,13 +407,103 @@ class ProjectionMapper:
 
             floor_canvas[dy0:dy1, dx0:dx1] = (src * a + dst * (1 - a)).astype(np.uint8)
 
-        if age_label and n > 0:
-            last_pt = all_pts[-1]
-            cv2.putText(floor_canvas, age_label, (int(last_pt[0]) + 20, int(last_pt[1]) - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        if age_label and n > 1:
+            self._draw_text_along_path(floor_canvas, all_pts, age_label)
 
         return floor_canvas
-    
+
+    def _draw_text_along_path(self, canvas, pts, text, font=cv2.FONT_HERSHEY_SIMPLEX, scale=0.7, color=(200, 200, 200), thickness=2):
+        if len(pts) < 2 or not text:
+            return
+
+        # Calculate cumulative distances
+        dists = [0.0]
+        for i in range(1, len(pts)):
+            dx = pts[i][0] - pts[i-1][0]
+            dy = pts[i][1] - pts[i-1][1]
+            dist = (dx**2 + dy**2)**0.5
+            dists.append(dists[-1] + dist)
+
+        total_dist = dists[-1]
+        if total_dist == 0:
+            return
+
+        # Measure text characters
+        char_sizes = [cv2.getTextSize(c, font, scale, thickness)[0] for c in text]
+        total_text_width = sum(w for w, h in char_sizes) + len(text) * 4 # 4px padding between chars
+        
+        # Start distance near the end of the line
+        start_dist = max(0, total_dist - total_text_width - 20)
+        curr_dist = start_dist
+        
+        for i, char in enumerate(text):
+            cw, ch = char_sizes[i]
+            
+            # Find the segment that contains curr_dist
+            idx = 0
+            while idx < len(dists) - 2 and dists[idx+1] < curr_dist:
+                idx += 1
+                
+            p1, p2 = pts[idx], pts[idx+1]
+            segment_len = dists[idx+1] - dists[idx]
+            if segment_len > 0:
+                t = (curr_dist - dists[idx]) / segment_len
+            else:
+                t = 0
+            
+            t = max(0, min(1, t))
+            cx = p1[0] + t * (p2[0] - p1[0])
+            cy = p1[1] + t * (p2[1] - p1[1])
+            
+            nx = p2[0] - p1[0]
+            ny = p2[1] - p1[1]
+            angle_deg = np.degrees(np.arctan2(ny, nx))
+            
+            # Draw char on a single channel patch
+            patch_size = int(max(cw, ch) * 2.5) + 10
+            patch = np.zeros((patch_size, patch_size), dtype=np.uint8)
+            
+            text_x = (patch_size - cw) // 2
+            text_y = (patch_size + ch) // 2
+            cv2.putText(patch, char, (text_x, text_y), font, scale, 255, thickness, cv2.LINE_AA)
+            
+            # Convert to BGRA
+            bgra_patch = np.zeros((patch_size, patch_size, 4), dtype=np.uint8)
+            bgra_patch[:, :, 0] = color[0]
+            bgra_patch[:, :, 1] = color[1]
+            bgra_patch[:, :, 2] = color[2]
+            bgra_patch[:, :, 3] = patch
+            
+            rotated = self.rotate_image(bgra_patch, angle_deg)
+            rh, rw = rotated.shape[:2]
+            
+            # Offset perpendicularly so it's beside the footsteps
+            slen = max(segment_len, 1e-5)
+            px, py = -ny / slen, nx / slen
+            offset = 40
+            text_cx = cx + px * offset
+            text_cy = cy + py * offset
+            
+            x0 = int(text_cx - rw // 2)
+            y0 = int(text_cy - rh // 2)
+            x1 = x0 + rw
+            y1 = y0 + rh
+            
+            canvas_h, canvas_w = canvas.shape[:2]
+            sx0 = max(0, -x0); sx1 = sx0 + (min(x1, canvas_w) - max(x0, 0))
+            sy0 = max(0, -y0); sy1 = sy0 + (min(y1, canvas_h) - max(y0, 0))
+            dx0 = max(x0, 0); dx1 = dx0 + (sx1 - sx0)
+            dy0 = max(y0, 0); dy1 = dy0 + (sy1 - sy0)
+            
+            if sx1 > sx0 and sy1 > sy0:
+                src = rotated[sy0:sy1, sx0:sx1]
+                alpha = src[:, :, 3:4] / 255.0
+                bgr = src[:, :, :3].astype(np.float32)
+                dst = canvas[dy0:dy1, dx0:dx1].astype(np.float32)
+                canvas[dy0:dy1, dx0:dx1] = (bgr * alpha + dst * (1 - alpha)).astype(np.uint8)
+                
+            curr_dist += cw + 4
+
     def render_projector_frame(self, person_trails=None, matched_trails=None):
         """
         Full pipeline: blank canvas -> draw animations -> warp to projector space.
