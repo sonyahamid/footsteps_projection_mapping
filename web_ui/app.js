@@ -142,8 +142,8 @@ function updateOrCreateImg(id, x, y, rot, opacity, srcUrl) {
         img.src = srcUrl;
         img.style.position = 'absolute';
         
-        img.style.width = '25px';
-        img.style.height = '50px';
+        img.style.width = '40px';
+        img.style.height = '80px';
         
         img.style.transformOrigin = '50% 50%';
         img.style.transition = 'transform 0.05s linear, opacity 0.3s ease-out';
@@ -159,5 +159,5 @@ function updateOrCreateImg(id, x, y, rot, opacity, srcUrl) {
         console.warn("Invalid footprint coords:", id, x, y, rot);
         return;
     }
-    img.style.transform = `translate3d(${x - Math.round(25/2)}px, ${y - Math.round(50/2)}px, 0) rotate(${rot + 90}deg)`;
+    img.style.transform = `translate3d(${x - Math.round(40/2)}px, ${y - Math.round(80/2)}px, 0) rotate(${rot + 90}deg)`;
 }
