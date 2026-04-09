@@ -271,6 +271,8 @@ class ProjectionMapper:
         self.proj_h   = data["proj_h"]
         self.H_cam    = np.array(data["H_cam"],  dtype=np.float64)
         self.H_proj   = np.array(data["H_proj"], dtype=np.float64)
+        self.cam_pts  = data.get("cam_pts")
+        self.proj_pts = data.get("proj_pts")
 
         # cycle through different step animations
         self.animators = [

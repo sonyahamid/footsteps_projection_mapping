@@ -5,7 +5,7 @@ from projection_mapping import ProjectionMapper
 from udp_receiver import FootstepReceiver
 
 def main():
-    mapper = ProjectionMapper("calibration_test.json") # Updated to existing calibration
+    mapper = ProjectionMapper("calibration.json") # Updated to existing calibration
     receiver = FootstepReceiver(port=7000)
 
     cap = cv2.VideoCapture(0)

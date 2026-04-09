@@ -12,9 +12,11 @@ lay tape on the floor in a matching grid and check alignment visually.
 
 from __future__ import annotations
 
+import os
 import socket
 import time
 import random
+import json
 
 import cv2
 import numpy as np
@@ -24,7 +26,7 @@ from projection_mapping import ProjectionMapper, calibrate_from_known_points, co
 CAM_W, CAM_H = 640, 480
 PROJ_W, PROJ_H = 1920, 1080
 FLOOR_W, FLOOR_H = 1000, 1000
-CALIBRATION_PATH = "calibration_test.json"
+CALIBRATION_PATH = "calibration.json"
 DEBUG_WINDOW = "Footsteps Debug"
 PROD_WINDOW = "Footsteps Projector"
 WEBCAM_INDEX = 0
@@ -52,17 +54,38 @@ FLOOR_CORNERS = [
 CORNER_LABELS = ["TL", "TR", "BR", "BL"]
 CORNER_COLORS = [(0, 0, 255), (0, 255, 0), (255, 0, 255), (0, 200, 255)]
 
-calibrate_from_known_points(
-    cam_pts=cam_pts,
-    proj_pts=proj_pts,
-    floor_w=FLOOR_W,
-    floor_h=FLOOR_H,
-    proj_w=PROJ_W,
-    proj_h=PROJ_H,
-    out_path=CALIBRATION_PATH,
-)
-
-mapper = ProjectionMapper(CALIBRATION_PATH)
+# Try to load existing calibration, or create a default one in-memory
+if os.path.exists(CALIBRATION_PATH):
+    mapper = ProjectionMapper(CALIBRATION_PATH)
+    if mapper.cam_pts:
+        cam_pts = [list(pt) for pt in mapper.cam_pts]
+    if mapper.proj_pts:
+        proj_pts = [list(pt) for pt in mapper.proj_pts]
+else:
+    # Just initialize a mapper manually based on default points since no file exists yet
+    H_cam = compute_homography(cam_pts, FLOOR_CORNERS)
+    H_proj = compute_homography(FLOOR_CORNERS, proj_pts)
+    
+    # We must mock enough to make ProjectionMapper work without a file
+    class MockMapper(ProjectionMapper):
+        def __init__(self):
+            self.floor_w = FLOOR_W
+            self.floor_h = FLOOR_H
+            self.proj_w = PROJ_W
+            self.proj_h = PROJ_H
+            self.H_cam = H_cam
+            self.H_proj = H_proj
+            self.cam_pts = cam_pts
+            self.proj_pts = proj_pts
+            from projection_mapping import GifAnimator
+            self.animators = [
+                GifAnimator("white_foot.gif", size=(27,54)),
+                GifAnimator("white_foot2.gif", size=(27,54)),
+                GifAnimator("white_foot3.gif", size=(27,54))
+            ]
+            self.tick = 0
+            
+    mapper = MockMapper()
 
 
 def draw_floor_corners(canvas):
@@ -338,7 +361,7 @@ def main():
     cv2.namedWindow(PROD_WINDOW, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(DEBUG_WINDOW, editor.mouse_callback)
 
-    print("Q = quit | G = toggle grid | C = toggle camera passthrough")
+    print("Q = quit | G = toggle grid | C = toggle camera passthrough | S = save calibration data")
 
     selected_pid = None
 
@@ -428,6 +451,18 @@ def main():
                 break
             elif key == ord("g"):
                 show_grid = not show_grid
+            elif key == ord("s"):
+                from projection_mapping import calibrate_from_known_points
+                calibrate_from_known_points(
+                    cam_pts=editor.as_tuples(),
+                    proj_pts=proj_pts,
+                    floor_w=FLOOR_W,
+                    floor_h=FLOOR_H,
+                    proj_w=PROJ_W,
+                    proj_h=PROJ_H,
+                    out_path=CALIBRATION_PATH,
+                )
+                print(f"Calibration saved to {CALIBRATION_PATH}")
                 print(f"Grid {'ON' if show_grid else 'off'}")
             elif key == ord("c"):
                 show_camera = not show_camera
