@@ -332,7 +332,7 @@ class ProjectionMapper:
             borderValue=(0, 0, 0, 0)
         )
 
-    def do_stuff(self, floor_canvas, floor_pts, trail_pts=None, age_label=None):
+    def do_stuff(self, floor_canvas, floor_pts, trail_pts=None, age_label=None, fade=1.0):
         all_pts = (trail_pts if trail_pts else []) + list(floor_pts)
         n = len(all_pts)
 
@@ -341,7 +341,6 @@ class ProjectionMapper:
 
             # Just loop the gif continuously
             frame_idx = self.tick % animator.n
-            fade = 1.0
 
             bgra_frame = animator.get_frame(frame_idx)
 
@@ -505,7 +504,7 @@ class ProjectionMapper:
         Full pipeline: blank canvas -> draw animations -> warp to projector space.
         person_trails: List of point arrays. Each array is a trail for one person.
                        The last point is the current position.
-        matched_trails: List of dicts {"trail": [...], "age": "..."}
+        matched_trails: List of dicts {"trail": [...], "age": "...", "fade": 1.0}
         Returns an (proj_h x proj_w x 3) numpy array ready to display/stream.
         """
         floor_canvas = self.make_floor_canvas()
@@ -518,8 +517,14 @@ class ProjectionMapper:
                     
         if matched_trails:
             for match in matched_trails:
-                if match["trail"]:
-                    floor_canvas = self.do_stuff(floor_canvas, [match["trail"][-1]], match["trail"][:-1], age_label=match["age_str"])
+                if match["trail"] and match.get("fade", 1.0) > 0:
+                    floor_canvas = self.do_stuff(
+                        floor_canvas, 
+                        [match["trail"][-1]], 
+                        match["trail"][:-1], 
+                        age_label=match.get("age_str", ""),
+                        fade=match.get("fade", 1.0)
+                    )
 
         self.tick += 1
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
