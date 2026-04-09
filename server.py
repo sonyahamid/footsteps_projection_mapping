@@ -72,8 +72,6 @@ async def data_loop():
         floor_h = calib["floor_h"]
 
     active_history_paths = {}  # pid -> {"path": [...], "fade": 1.0, "fade_start": None}
-    import random
-    selected_pid = None
 
     while True:
         # Match python projection map 60fps ~ 0.016s sleep
@@ -84,25 +82,28 @@ async def data_loop():
 
         person_trails = {}
         if trails:
-            if selected_pid not in trails:
-                selected_pid = random.choice(list(trails.keys()))
-            
             # Map all active live trails into floor space
             for pid, pts in trails.items():
                 floor_pts = [{"x": p[0] * floor_w, "y": p[1] * floor_h} for p in pts]
                 person_trails[pid] = floor_pts
-        else:
-            selected_pid = None
 
         current_time = time.time()
         
-        # Check active matched paths
-        if selected_pid is not None and selected_pid in matched:
-            active_history_paths[selected_pid] = {
-                "path": matched[selected_pid],
-                "fade": 1.0,
-                "fade_start": None
-            }
+        # Add any new matched walkers
+        for pid in matched:
+            if pid in trails:
+                if pid not in active_history_paths:
+                    active_history_paths[pid] = {
+                        "path": matched[pid]['pts'],
+                        "fade": 1.0,
+                        "fade_start": None,
+                        "age_str": f"{matched[pid]['age_secs']:.1f}s"
+                    }
+                else:
+                    active_history_paths[pid]["path"] = matched[pid]['pts']
+                    active_history_paths[pid]["fade"] = 1.0
+                    active_history_paths[pid]["fade_start"] = None
+                    active_history_paths[pid]["age_str"] = f"{matched[pid]['age_secs']:.1f}s"
             
         pids_to_del = []
         for pid, data in active_history_paths.items():
@@ -112,7 +113,7 @@ async def data_loop():
                     data["fade_start"] = current_time
                     
                 elapsed = current_time - data["fade_start"]
-                fade_duration = 3.0
+                fade_duration = 1.5
                 data["fade"] = max(0.0, 1.0 - (elapsed / fade_duration))
                 
                 if data["fade"] <= 0.0:
@@ -131,7 +132,7 @@ async def data_loop():
                 matched_trails[pid] = {
                     "trail": floor_pts,
                     "fade": data["fade"],
-                    "age_str": "12.4s" # TODO: extract real age if provided by matching logic, hardcoded for now just to demo text-on-path
+                    "age_str": data.get("age_str", "")
                 }
 
         payload = {
@@ -145,6 +146,11 @@ async def data_loop():
 async def main():
     # Start HTTP server background thread
     threading.Thread(target=run_http_server, daemon=True).start()
+    
+    # Optional: Automatically push the web UI open
+    import webbrowser
+    # Give the HTTP server a tiny bit to bind
+    threading.Timer(1.0, lambda: webbrowser.open('http://localhost:8000/web_ui/')).start()
     
     # Start WS server and Data loop concurrently
     logger.info(f"Starting WebSocket server on port {PORT_WS}...")

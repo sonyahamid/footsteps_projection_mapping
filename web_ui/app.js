@@ -28,15 +28,7 @@ ws.onmessage = (event) => {
 function applyHomographyTransform() {
     if (!projectionCalibration) return;
     
-    // Homography from Floor -> Projector is H_proj in calibration.json
     const H = projectionCalibration.H_proj;
-    
-    // H is a 3x3 matrix. CSS matrix3d takes a 4x4 matrix (column-major order).
-    // Let's expand:
-    // [ h00, h01, h02 ]
-    // [ h10, h11, h12 ]
-    // [ h20, h21, h22 ]
-    
     const h00 = H[0][0], h01 = H[0][1], h02 = H[0][2];
     const h10 = H[1][0], h11 = H[1][1], h12 = H[1][2];
     const h20 = H[2][0], h21 = H[2][1], h22 = H[2][2];
@@ -44,12 +36,9 @@ function applyHomographyTransform() {
     const w = projectionCalibration.floor_w;
     const h = projectionCalibration.floor_h;
 
-    // Apply the 3D transform mapping onto the main root div
     floorCanvas.style.width = w + 'px';
     floorCanvas.style.height = h + 'px';
 
-    // We do NOT normalize by h22 if we want proper perspective projection.
-    // CSS matrix3d:
     floorCanvas.style.transform = `matrix3d(
         ${h00}, ${h10}, 0, ${h20},
         ${h01}, ${h11}, 0, ${h21},
@@ -63,57 +52,70 @@ function renderFrame(personTrails, matchedTrails) {
     const nowKeys = new Set();
     
     // For rendering, we will iterate over live matched paths
-    // Render Matched historical footprints and Text On Path
     Object.entries(matchedTrails).forEach(([pid, data]) => {
         const trail = data.trail;
         if (trail.length < 2) return;
         
-        let dStr = `M ${trail[0].x} ${trail[0].y} `;
-        for (let i = 1; i < trail.length; i++) {
-            dStr += `L ${trail[i].x} ${trail[i].y} `;
-        }
-        
+        let dStr = getSplinePath(trail);
         const pathId = `path-${pid}`;
-        const strokeColor = `rgba(0, 255, 0, ${data.fade})`; // Faded green lines
         
         svgContents += `
             <path id="${pathId}" class="fade-path" d="${dStr}" 
-                  stroke="${strokeColor}" fill="transparent" stroke-width="3" stroke-dasharray="10 10"/>
-            <text fill="rgba(255,255,255,${data.fade})" font-size="28" font-family="'Courier New', Courier, monospace" font-weight="bold">
-                <textPath href="#${pathId}" startOffset="50%" text-anchor="middle">${data.age_str}</textPath>
-            </text>
+                  stroke="transparent" fill="transparent" stroke-width="0" />
         `;
         
-        // Spawn footprint GIF at head!
-        const px = trail[trail.length-1].x;
-        const py = trail[trail.length-1].y;
+        // Exact distance-based footprint placement
+        const STEP_DISTANCE = 85; 
         
-        // basic angle
-        const dx = trail[trail.length-1].x - trail[trail.length-2].x;
-        const dy = trail[trail.length-1].y - trail[trail.length-2].y;
-        const rot = Math.atan2(dy, dx) * 180 / Math.PI;
+        let stepCount = 0;
+        let distSinceLastStep = 0.0;
+        
+        // Always place a step exactly at the start
+        const startPt = trail[0];
+        if (trail.length > 1) {
+             const dx = trail[1].x - startPt.x;
+             const dy = trail[1].y - startPt.y;
+             const rot = Math.atan2(dy, dx) * 180 / Math.PI;
+             let imgId = `img-match-${pid}-${stepCount}`;
+             nowKeys.add(imgId);
+             updateOrCreateImg(imgId, startPt.x, startPt.y, rot, data.fade, '../white_foot.gif');
+             stepCount++;
+        }
 
-        const imgId = `img-match-${pid}`;
-        nowKeys.add(imgId);
-        updateOrCreateImg(imgId, px, py, rot + 90, data.fade, '../white_foot.gif'); 
+        for (let i = 0; i < trail.length - 1; i++) {
+            const p1 = trail[i];
+            const p2 = trail[i+1];
+            
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const segmentDist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (segmentDist === 0) continue;
+            
+            const dirX = dx / segmentDist;
+            const dirY = dy / segmentDist;
+            const rot = Math.atan2(dirY, dirX) * 180 / Math.PI;
+            
+            let walkedOnSegment = 0.0;
+            
+            while (distSinceLastStep + (segmentDist - walkedOnSegment) >= STEP_DISTANCE) {
+                const stepToTake = STEP_DISTANCE - distSinceLastStep;
+                walkedOnSegment += stepToTake;
+                distSinceLastStep = 0.0; // Reset since we stepped
+                
+                const stepX = p1.x + dirX * walkedOnSegment;
+                const stepY = p1.y + dirY * walkedOnSegment;
+                
+                let imgId = `img-match-${pid}-${stepCount}`;
+                nowKeys.add(imgId);
+                // Drop footprint
+                updateOrCreateImg(imgId, stepX, stepY, rot, data.fade, '../white_foot.gif');
+                stepCount++;
+            }
+            distSinceLastStep += (segmentDist - walkedOnSegment);
+        }
     });
 
-    // Render simple live positions
-    Object.entries(personTrails).forEach(([pid, trail]) => {
-        if (trail.length < 2) return;
-        
-        const px = trail[trail.length-1].x;
-        const py = trail[trail.length-1].y;
-        
-        const dx = trail[trail.length-1].x - trail[trail.length-2].x;
-        const dy = trail[trail.length-1].y - trail[trail.length-2].y;
-        const rot = Math.atan2(dy, dx) * 180 / Math.PI;
-
-        const imgId = `img-live-${pid}`;
-        nowKeys.add(imgId);
-        updateOrCreateImg(imgId, px, py, rot + 90, 1.0, '../white_foot3.gif'); 
-    });
-    
     svgLayer.innerHTML = svgContents;
     
     // Unmount stale imgs
@@ -133,11 +135,9 @@ function updateOrCreateImg(id, x, y, rot, opacity, srcUrl) {
         img.src = srcUrl;
         img.style.position = 'absolute';
         
-        // Size it appropriately (the gif is around 27x54 according to python mapper)
-        img.style.width = '27px';
-        img.style.height = '54px';
+        img.style.width = '25px';
+        img.style.height = '50px';
         
-        // Move registration/transform-origin to center of foot
         img.style.transformOrigin = '50% 50%';
         img.style.transition = 'transform 0.05s linear, opacity 0.3s ease-out';
         
@@ -145,10 +145,12 @@ function updateOrCreateImg(id, x, y, rot, opacity, srcUrl) {
         activeDOMEls.set(id, img);
     }
     
-    // Update transform
     img.style.opacity = Math.max(0, opacity);
     
-    // Hardware accelerated GPU composite for translate rotation
-    // Note: centering by subtracting half width/height
-    img.style.transform = `translate3d(${x - 13.5}px, ${y - 27}px, 0) rotate(${rot}deg)`;
+    // Ensure we don't drop invalid numbers into CSS, which causes Fallback to 0,0 location!
+    if (isNaN(x) || isNaN(y) || isNaN(rot)) {
+        console.warn("Invalid footprint coords:", id, x, y, rot);
+        return;
+    }
+    img.style.transform = `translate3d(${x - Math.round(25/2)}px, ${y - Math.round(50/2)}px, 0) rotate(${rot + 90}deg)`;
 }

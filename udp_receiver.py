@@ -5,6 +5,8 @@ import time
 class FootstepReceiver:
     def __init__(self, port=7000):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Allow reusing the port for UDP to prevent "Address already in use" crashes upon restart
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", port))
         self.lock = threading.Lock()
         self.trails = {}  # person_id -> list of (x,y)
@@ -33,7 +35,7 @@ class FootstepReceiver:
                         pts.append((x, y))
                         idx += 4
                 with self.lock:
-                    self.matched_paths[pid] = pts
+                    self.matched_paths[pid] = {'pts': pts, 'age_secs': age_secs}
             else:
                 x = float(parts[0])
                 y = float(parts[1])
@@ -57,6 +59,7 @@ class FootstepReceiver:
                 if current_time - last_t > 1.0:
                     self.trails.pop(pid, None)
                     self.last_seen.pop(pid, None)
+                    self.matched_paths.pop(pid, None)
                 else:
                     active_pids.append(pid)
                     
@@ -64,4 +67,5 @@ class FootstepReceiver:
 
     def get_matched_paths(self):
         with self.lock:
-            return {pid: pts[:] for pid, pts in self.matched_paths.items()}
+            # Only return matches for paths that are still active
+            return {pid: data for pid, data in self.matched_paths.items() if pid in self.trails}
