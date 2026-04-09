@@ -57,8 +57,10 @@ class GifAnimator:
         self.n = len(self.frames)
 
     def get_frame(self, t):
-        """Return the BGRA frame for global tick t (clamps to last frame to avoid looping)."""
-        return self.frames[min(t, self.n - 1)]
+        """Return the BGRA frame for global tick t (loops by modulo)."""
+        if self.n == 0:
+            return None
+        return self.frames[t % self.n]
     
 
 # Homography helpers
@@ -335,17 +337,11 @@ class ProjectionMapper:
         n = len(all_pts)
 
         for i, pt in enumerate(all_pts):
-            if i == n - 1:
-                fade = 1.0
-            else:
-                age_idx = n - 1 - i
-                fade = max(0.2, 1.0 - (age_idx * 0.05))
-
             animator = self.animators[i % len(self.animators)]
-            if i == n - 1:
-                frame_idx = animator.n - 1
-            else:
-                frame_idx = self.tick
+
+            # Just loop the gif continuously
+            frame_idx = self.tick % animator.n
+            fade = 1.0
 
             bgra_frame = animator.get_frame(frame_idx)
 
