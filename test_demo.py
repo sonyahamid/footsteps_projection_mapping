@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import socket
 import time
+import random
 
 import cv2
 import numpy as np
@@ -296,6 +297,8 @@ def main():
 
     print("Q = quit")
 
+    selected_pid = None
+
     try:
         while True:
             udp_receiver.poll()
@@ -321,7 +324,11 @@ def main():
                     person_trails.append(trail)
 
             matched_trails = []
-            for pid, data in udp_receiver.matches.items():
+            if udp_receiver.matches:
+                if selected_pid not in udp_receiver.matches:
+                    selected_pid = random.choice(list(udp_receiver.matches.keys()))
+                
+                data = udp_receiver.matches[selected_pid]
                 trail = []
                 for hx, hy, hdx, hdy in data["history"]:
                     hcx, hcy = hx * CAM_W, hy * CAM_H
@@ -341,6 +348,8 @@ def main():
                         age_str = f"({int(age_secs // 3600)} hours ago)"
 
                     matched_trails.append({"trail": trail, "age_str": age_str})
+            else:
+                selected_pid = None
 
             projected_frame = mapper.render_projector_frame(
                 person_trails=[],  # Only show history paths

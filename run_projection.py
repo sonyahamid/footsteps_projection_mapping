@@ -2,6 +2,8 @@ import cv2
 from projection_mapping import ProjectionMapper
 from udp_receiver import FootstepReceiver
 
+import random
+
 def main():
     mapper = ProjectionMapper("calibration.json")
     receiver = FootstepReceiver(port=7000)
@@ -11,6 +13,8 @@ def main():
     cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
     cv2.namedWindow("projector", cv2.WINDOW_NORMAL)
     cv2.setWindowProperty("projector", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    selected_pid = None
 
     while True:
         ret, frame = cap.read()
@@ -34,9 +38,15 @@ def main():
         # --- PROJECTOR WINDOW ---
         # Convert normalized → floor coords
         person_trails_floor = []
-        for pid, pts in trails.items():
+        if trails:
+            if selected_pid not in trails:
+                selected_pid = random.choice(list(trails.keys()))
+            
+            pts = trails[selected_pid]
             floor_pts = [(p[0] * mapper.floor_w, p[1] * mapper.floor_h) for p in pts]
             person_trails_floor.append(floor_pts)
+        else:
+            selected_pid = None
 
         proj_frame = mapper.render_projector_frame(person_trails=person_trails_floor)
         cv2.imshow("projector", proj_frame)
