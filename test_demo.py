@@ -107,6 +107,7 @@ class FootstepUDPReceiver:
         self.sock.bind(("0.0.0.0", port))
         self.sock.setblocking(False)
         self.people = {} # person_id -> { "pos": (x,y), "history": [(hx,hy), ...], "last_seen": time.time() }
+        self.matches = {} # person_id -> { "age": age_secs, "history": [(hx,hy), ...], "last_seen": time.time() }
 
     def poll(self):
         try:
@@ -119,24 +120,42 @@ class FootstepUDPReceiver:
                 for line in text.split('\n'):
                     if not line: continue
                     parts = line.split()
-                    if len(parts) >= 4:
-                        x = float(parts[0])
-                        y = float(parts[1])
-                        person_id = int(parts[2])
-                        history_length = int(parts[3])
-                        
-                        history = []
-                        idx = 4
-                        for _ in range(history_length):
-                            if idx + 1 < len(parts):
-                                history.append((float(parts[idx]), float(parts[idx+1])))
-                                idx += 2
-                                
-                        self.people[person_id] = {
-                            "pos": (x, y),
-                            "history": history,
-                            "last_seen": now
-                        }
+                    if parts[0] == "MATCH":
+                        if len(parts) >= 4:
+                            person_id = int(parts[1])
+                            history_length = int(parts[2])
+                            age_secs = float(parts[3])
+                            history = []
+                            idx = 4
+                            for _ in range(history_length):
+                                if idx + 1 < len(parts):
+                                    history.append((float(parts[idx]), float(parts[idx+1])))
+                                    idx += 2
+                            
+                            self.matches[person_id] = {
+                                "age": age_secs,
+                                "history": history,
+                                "last_seen": now
+                            }
+                    else:
+                        if len(parts) >= 4:
+                            x = float(parts[0])
+                            y = float(parts[1])
+                            person_id = int(parts[2])
+                            history_length = int(parts[3])
+                            
+                            history = []
+                            idx = 4
+                            for _ in range(history_length):
+                                if idx + 1 < len(parts):
+                                    history.append((float(parts[idx]), float(parts[idx+1])))
+                                    idx += 2
+                                    
+                            self.people[person_id] = {
+                                "pos": (x, y),
+                                "history": history,
+                                "last_seen": now
+                            }
         except BlockingIOError:
             pass
         except Exception as e:
@@ -147,11 +166,15 @@ class FootstepUDPReceiver:
         dead_ids = [pid for pid, data in self.people.items() if now - data["last_seen"] > 1.0]
         for pid in dead_ids:
             del self.people[pid]
+            
+        dead_matches = [pid for pid, data in self.matches.items() if now - data["last_seen"] > 1.0]
+        for pid in dead_matches:
+            del self.matches[pid]
 
 udp_receiver = FootstepUDPReceiver(7000)
 
 # Camera view renderer (inverse warp from floor to camera space)
-def render_camera_view(mapper, person_trails, cam_w=CAM_W, cam_h=CAM_H):
+def render_camera_view(mapper, person_trails, matched_trails=None, cam_w=CAM_W, cam_h=CAM_H):
     H_cam_inv = np.linalg.inv(mapper.H_cam)
     canvas = mapper.make_floor_canvas()
     
@@ -159,6 +182,11 @@ def render_camera_view(mapper, person_trails, cam_w=CAM_W, cam_h=CAM_H):
         for trail in person_trails:
             if trail:
                 canvas = mapper.do_stuff(canvas, [trail[-1]], trail[:-1])
+
+    if matched_trails:
+        for match in matched_trails:
+            if match["trail"]:
+                canvas = mapper.do_stuff(canvas, [match["trail"][-1]], match["trail"][:-1], age_label=match["age_str"])
 
     # draw the floor corners on the floor canvas before warping into cam space
     draw_floor_corners(canvas)
@@ -213,11 +241,33 @@ while True:
         if trail:
             person_trails.append(trail)
 
+    matched_trails = []
+    for pid, data in udp_receiver.matches.items():
+        trail = []
+        for hx, hy in data["history"]:
+            hcx, hcy = hx * CAM_W, hy * CAM_H
+            trail.append(mapper.cam_to_floor((hcx, hcy)))
+            
+        if trail:
+            age_secs = data["age"]
+            if age_secs < 60:
+                age_str = f"({int(age_secs)} secs ago)"
+            elif age_secs < 3600:
+                age_str = f"({int(age_secs // 60)} mins ago)"
+            else:
+                age_str = f"({int(age_secs // 3600)} hours ago)"
+                
+            matched_trails.append({"trail": trail, "age_str": age_str})
+
     # ── Stage 1: floor canvas (pre-warp, flat top-down) ───────────────────
     floor_canvas = mapper.make_floor_canvas()
     for trail in person_trails:
         if trail:
             floor_canvas = mapper.do_stuff(floor_canvas, [trail[-1]], trail[:-1])
+            
+    for match in matched_trails:
+        if match["trail"]:
+            floor_canvas = mapper.do_stuff(floor_canvas, [match["trail"][-1]], match["trail"][:-1], age_label=match["age_str"])
 
     draw_floor_corners(floor_canvas)
     view_floor = label(floor_canvas,
@@ -225,7 +275,7 @@ while True:
                        "flat 1000x1000, corners = tape marks on floor")
 
     # ── Stage 2: projector output (post-warp) ─────────────────────────────
-    proj_full  = mapper.render_projector_frame(person_trails=person_trails)
+    proj_full  = mapper.render_projector_frame(person_trails=person_trails, matched_trails=matched_trails)
 
     # draw proj corner markers directly in projector space
     for (px, py), lbl, color in zip(proj_pts, CORNER_LABELS, CORNER_COLORS):
@@ -241,7 +291,7 @@ while True:
                        "1920x1080 shown at 50% — keystone corrects for angle")
 
     # ── Stage 3: camera screen space ──────────────────────────────────────
-    cam_view  = render_camera_view(mapper, person_trails)
+    cam_view  = render_camera_view(mapper, person_trails, matched_trails=matched_trails)
     view_cam  = label(cam_view,
                       "3  camera screen space",
                       "640x480 — trapezoid = what camera sees from 7ft / 45 deg")

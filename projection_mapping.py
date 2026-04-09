@@ -330,7 +330,7 @@ class ProjectionMapper:
             borderValue=(0, 0, 0, 0)
         )
 
-    def do_stuff(self, floor_canvas, floor_pts, trail_pts=None):
+    def do_stuff(self, floor_canvas, floor_pts, trail_pts=None, age_label=None):
         all_pts = (trail_pts if trail_pts else []) + list(floor_pts)
         n = len(all_pts)
 
@@ -394,13 +394,19 @@ class ProjectionMapper:
 
             floor_canvas[dy0:dy1, dx0:dx1] = (src * a + dst * (1 - a)).astype(np.uint8)
 
+        if age_label and n > 0:
+            last_pt = all_pts[-1]
+            cv2.putText(floor_canvas, age_label, (int(last_pt[0]) + 20, int(last_pt[1]) - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+
         return floor_canvas
     
-    def render_projector_frame(self, person_trails=None):
+    def render_projector_frame(self, person_trails=None, matched_trails=None):
         """
         Full pipeline: blank canvas -> draw animations -> warp to projector space.
         person_trails: List of point arrays. Each array is a trail for one person.
                        The last point is the current position.
+        matched_trails: List of dicts {"trail": [...], "age": "..."}
         Returns an (proj_h x proj_w x 3) numpy array ready to display/stream.
         """
         floor_canvas = self.make_floor_canvas()
@@ -410,6 +416,11 @@ class ProjectionMapper:
                 if trail:
                     # current position is the last element
                     floor_canvas = self.do_stuff(floor_canvas, [trail[-1]], trail[:-1])
+                    
+        if matched_trails:
+            for match in matched_trails:
+                if match["trail"]:
+                    floor_canvas = self.do_stuff(floor_canvas, [match["trail"][-1]], match["trail"][:-1], age_label=match["age_str"])
 
         self.tick += 1
         proj_frame = warp_frame(self.H_proj, floor_canvas, self.proj_w, self.proj_h)
