@@ -57,8 +57,8 @@ class GifAnimator:
         self.n = len(self.frames)
 
     def get_frame(self, t):
-        """Return the BGRA frame for global tick t (wraps automatically)."""
-        return self.frames[t % self.n]
+        """Return the BGRA frame for global tick t (clamps to last frame to avoid looping)."""
+        return self.frames[min(t, self.n - 1)]
     
 
 # Homography helpers
