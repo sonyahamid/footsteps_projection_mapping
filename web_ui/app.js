@@ -68,7 +68,7 @@ function renderFrame(personTrails, matchedTrails) {
         
         svgContents += `
             <path id="${pathId}" class="fade-path" d="${dStr}" 
-                  stroke="transparent" fill="transparent" stroke-width="0" />
+                  stroke="white" fill="transparent" stroke-width="8" />
         `;
         
         // Exact distance-based footprint placement
