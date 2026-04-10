@@ -18,6 +18,8 @@ CALIBRATION_FILE = "calibration.json"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ProjectionServer")
 
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/footstep_history.json")
+
 def ensure_calibration_exists():
     if not os.path.exists(CALIBRATION_FILE):
         logger.info(f"{CALIBRATION_FILE} not found. Generating default calibration.")
@@ -33,6 +35,40 @@ def run_http_server():
     Handler = http.server.SimpleHTTPRequestHandler
     # Disable caching for development
     class NoCacheHandler(Handler):
+        def do_GET(self):
+            if self.path == '/api/random_path':
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.end_headers()
+                
+                try:
+                    with open(HISTORY_FILE, 'r') as f:
+                        history = json.load(f)
+                    if not history:
+                        self.wfile.write(b"null")
+                        return
+                        
+                    import random
+                    path_data = random.choice(history)
+                    self.wfile.write(json.dumps(path_data).encode())
+                except FileNotFoundError:
+                    self.wfile.write(b"null")
+                return
+            elif self.path == '/api/history':
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.end_headers()
+                try:
+                    with open(HISTORY_FILE, 'r') as f:
+                        self.wfile.write(f.read().encode())
+                except FileNotFoundError:
+                    self.wfile.write(b"[]")
+                return
+            else:
+                super().do_GET()
+
         def end_headers(self):
             self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
             super().end_headers()
@@ -69,6 +105,36 @@ async def broadcast_data(data):
         *(client.send(message) for client in CLIENTS),
         return_exceptions=True
     )
+
+async def process_and_save_trail(pid, data, mapper, CAM_W, CAM_H):
+    """Processes a path to floor coordinates and appends to footstep_history.json."""
+    if len(data["path"]) < 10:
+        # Ignore very short trails
+        return
+        
+    floor_pts = []
+    for p in data["path"]:
+        fx, fy = mapper.cam_to_floor((p[0] * CAM_W, p[1] * CAM_H))
+        floor_pts.append({"x": fx, "y": fy})
+        
+    if not os.path.exists(os.path.dirname(HISTORY_FILE)):
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+        
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+        except Exception:
+            history = []
+            
+    history.append(floor_pts)
+    # Keep last N trails
+    history = history[-100:]
+    
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f)
+    logger.info(f"Saved path for pid {pid} with {len(floor_pts)} points")
 
 async def data_loop():
     """Reads UDP stream, transforms state, and broadcasts to WebSockets."""
@@ -142,6 +208,8 @@ async def data_loop():
                 
                 if data["fade"] <= 0.0:
                     pids_to_del.append(pid)
+                    # When fading out is fully complete, save the path
+                    await process_and_save_trail(pid, data, mapper, CAM_W, CAM_H)
             else:
                 data["fade_start"] = None
                 data["fade"] = 1.0
@@ -150,22 +218,12 @@ async def data_loop():
             del active_history_paths[pid]
 
         matched_trails = {}
-        for pid, data in active_history_paths.items():
-            floor_pts = []
-            for p in data["path"]:
-                fx, fy = mapper.cam_to_floor((p[0] * CAM_W, p[1] * CAM_H))
-                floor_pts.append({"x": fx, "y": fy})
-            if floor_pts:
-                matched_trails[pid] = {
-                    "trail": floor_pts,
-                    "fade": data["fade"],
-                    "age_str": data.get("age_str", "")
-                }
-
+        # We NO LONGER broadcast paths to WS. Let frontend drive playback.
+        
         payload = {
             "type": "frame",
-            "person_trails": person_trails,
-            "matched_trails": matched_trails
+            "person_trails": {},
+            "matched_trails": {}
         }
         
         await broadcast_data(payload)

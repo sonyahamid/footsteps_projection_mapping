@@ -27,9 +27,13 @@ ws.onmessage = (event) => {
     if (msg.type === 'calibration') {
         projectionCalibration = msg.data;
         applyHomographyTransform();
-    } else if (msg.type === 'frame') {
-        renderFrame(msg.person_trails, msg.matched_trails);
-    }
+        // Start playback loop once we have our calibration / transform
+        if (!window.playbackStarted) {
+            window.playbackStarted = true;
+            startPlaybackLoop();
+        }
+    } 
+    // We ignore 'frame' messages for live walkers now since we do async playback
 };
 
 function applyHomographyTransform() {
@@ -54,86 +58,133 @@ function applyHomographyTransform() {
     )`;
 }
 
-function renderFrame(personTrails, matchedTrails) {
-    let svgContents = '';
-    const nowKeys = new Set();
-    
-    // For rendering, we will iterate over live matched paths
-    Object.entries(matchedTrails).forEach(([pid, data]) => {
-        const trail = data.trail;
-        if (trail.length < 2) return;
-        
-        let dStr = getSplinePath(trail);
-        const pathId = `path-${pid}`;
-        
-        svgContents += `
-            <path id="${pathId}" class="fade-path" d="${dStr}" 
-                  stroke="white" fill="transparent" stroke-width="8" />
-        `;
-        
-        // Exact distance-based footprint placement
-        const STEP_DISTANCE = 85; 
-        
-        let stepCount = 0;
-        let distSinceLastStep = 0.0;
-        
-        // Always place a step exactly at the start
-        const startPt = trail[0];
-        if (trail.length > 1) {
-             const dx = trail[1].x - startPt.x;
-             const dy = trail[1].y - startPt.y;
-             const rot = Math.atan2(dy, dx) * 180 / Math.PI;
-             let imgId = `img-match-${pid}-${stepCount}`;
-             nowKeys.add(imgId);
-             updateOrCreateImg(imgId, startPt.x, startPt.y, rot, data.fade, '../white_foot.gif');
-             stepCount++;
-        }
+const STEP_DISTANCE = 85; 
 
-        for (let i = 0; i < trail.length - 1; i++) {
-            const p1 = trail[i];
-            const p2 = trail[i+1];
-            
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const segmentDist = Math.sqrt(dx*dx + dy*dy);
-            
-            if (segmentDist === 0) continue;
-            
-            const dirX = dx / segmentDist;
-            const dirY = dy / segmentDist;
-            const rot = Math.atan2(dirY, dirX) * 180 / Math.PI;
-            
-            let walkedOnSegment = 0.0;
-            
-            while (distSinceLastStep + (segmentDist - walkedOnSegment) >= STEP_DISTANCE) {
-                const stepToTake = STEP_DISTANCE - distSinceLastStep;
-                walkedOnSegment += stepToTake;
-                distSinceLastStep = 0.0; // Reset since we stepped
-                
-                const stepX = p1.x + dirX * walkedOnSegment;
-                const stepY = p1.y + dirY * walkedOnSegment;
-                
-                let imgId = `img-match-${pid}-${stepCount}`;
-                nowKeys.add(imgId);
-                // Drop footprint
-                updateOrCreateImg(imgId, stepX, stepY, rot, data.fade, '../white_foot.gif');
-                stepCount++;
+async function startPlaybackLoop() {
+    while (true) {
+        try {
+            const res = await fetch('/api/random_path');
+            if (res.ok) {
+                const trailCoords = await res.json();
+                if (trailCoords && Array.isArray(trailCoords) && trailCoords.length > 2) {
+                    await playTrail(trailCoords);
+                } else {
+                    // No valid path data found, wait and try again
+                    await new Promise(r => setTimeout(r, 2000));
+                }
             }
-            distSinceLastStep += (segmentDist - walkedOnSegment);
+        } catch (err) {
+            console.error('Error fetching random path:', err);
         }
-    });
+        
+        // Random wait between 2s and 6s before playing the next trail
+        const waitTime = 2000 + Math.random() * 4000;
+        await new Promise(r => setTimeout(r, waitTime));
+    }
+}
 
-    svgLayer.innerHTML = svgContents;
+async function playTrail(trail) {
+    let dStr = getSplinePath(trail);
+    const pid = Math.floor(Math.random() * 1000000); // Random ID for the instance
+    const pathId = `path-${pid}`;
     
-    // Unmount stale imgs
-    activeDOMEls.forEach((el, id) => {
-        if (!nowKeys.has(id)) {
+    // Draw the debug path
+    svgLayer.innerHTML = `
+        <path id="${pathId}" class="fade-path" d="${dStr}" 
+              stroke="white" fill="transparent" stroke-width="8" opacity="0.3" />
+    `;
+    
+    let steps = [];
+    const startPt = trail[0];
+    
+    if (trail.length > 1) {
+        const dx = trail[1].x - startPt.x;
+        const dy = trail[1].y - startPt.y;
+        const rot = Math.atan2(dy, dx) * 180 / Math.PI;
+        steps.push({ x: startPt.x, y: startPt.y, rot: rot });
+    }
+
+    let distSinceLastStep = 0.0;
+    
+    for (let i = 0; i < trail.length - 1; i++) {
+        const p1 = trail[i];
+        const p2 = trail[i+1];
+        
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const segmentDist = Math.sqrt(dx*dx + dy*dy);
+        
+        if (segmentDist === 0) continue;
+        
+        const dirX = dx / segmentDist;
+        const dirY = dy / segmentDist;
+        const rot = Math.atan2(dirY, dirX) * 180 / Math.PI;
+        
+        let walkedOnSegment = 0.0;
+        
+        while (distSinceLastStep + (segmentDist - walkedOnSegment) >= STEP_DISTANCE) {
+            const stepToTake = STEP_DISTANCE - distSinceLastStep;
+            walkedOnSegment += stepToTake;
+            distSinceLastStep = 0.0;
+            
+            const stepX = p1.x + dirX * walkedOnSegment;
+            const stepY = p1.y + dirY * walkedOnSegment;
+            
+            steps.push({ x: stepX, y: stepY, rot: rot });
+        }
+        distSinceLastStep += (segmentDist - walkedOnSegment);
+    }
+    
+    const stepIds = [];
+    
+    // Fade in chronologically
+    for (let i = 0; i < steps.length; i++) {
+        const st = steps[i];
+        const imgId = `img-play-${pid}-${i}`;
+        stepIds.push(imgId);
+        
+        // Start as transparent
+        updateOrCreateImg(imgId, st.x, st.y, st.rot, 0, '../white_foot.gif');
+        
+        // Let the DOM update
+        await new Promise(r => requestAnimationFrame(r));
+        
+        // Fade in
+        updateOrCreateImg(imgId, st.x, st.y, st.rot, 1.0, '../white_foot.gif');
+        
+        // Walk pace delay (e.g. 300ms per step)
+        await new Promise(r => setTimeout(r, 400));
+    }
+    
+    // Pause briefly once full path is revealed
+    await new Promise(r => setTimeout(r, 3000));
+    
+    // Fade out chronologically
+    for (let i = 0; i < steps.length; i++) {
+        const id = stepIds[i];
+        const st = steps[i];
+        
+        // Fade out
+        updateOrCreateImg(id, st.x, st.y, st.rot, 0, '../white_foot.gif');
+        
+        // Small delay between fading consecutive steps out
+        await new Promise(r => setTimeout(r, 300));
+    }
+    
+    // Remove all after fade outs finish
+    await new Promise(r => setTimeout(r, 500)); // allow CSS transition
+    stepIds.forEach(id => {
+        const el = activeDOMEls.get(id);
+        if (el) {
             el.remove();
             activeDOMEls.delete(id);
         }
     });
+
+    svgLayer.innerHTML = ''; // clear debugging path
 }
 
+// Keep the old updateOrCreateImg function the same
 function updateOrCreateImg(id, x, y, rot, opacity, srcUrl) {
     let img = activeDOMEls.get(id);
     if (!img) {
